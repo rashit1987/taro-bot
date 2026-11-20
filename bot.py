@@ -4,7 +4,6 @@ import os
 import random
 import sqlite3
 from datetime import datetime
-from PIL import Image
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, BufferedInputFile
