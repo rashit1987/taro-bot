@@ -95,7 +95,7 @@ def extract_article(text: str) -> int | None:
         return int(match.group(1))
     digits = re.findall(r"\b\d{6,12}\b", text)
     if digits:
-        return int(digits)
+        return int(next(iter(digits)))
     return None
 
 
