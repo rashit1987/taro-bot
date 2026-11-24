@@ -96,51 +96,59 @@ def extract_article(text: str) -> int | None:
     return None
 
 
-def get_wb_basket(vol: int) -> str:
-    if vol <= 143: return "01"
-    if vol <= 287: return "02"
-    if vol <= 431: return "03"
-    if vol <= 719: return "04"
-    if vol <= 1007: return "05"
-    if vol <= 1061: return "06"
-    if vol <= 1115: return "07"
-    if vol <= 1169: return "08"
-    if vol <= 1313: return "09"
-    if vol <= 1601: return "10"
-    if vol <= 1655: return "11"
-    if vol <= 1919: return "12"
-    if vol <= 2045: return "13"
-    if vol <= 2189: return "14"
-    if vol <= 2405: return "15"
-    if vol <= 2621: return "16"
-    if vol <= 2837: return "17"
-    if vol <= 3053: return "18"
-    return "19"
+def candidate_baskets(vol: int) -> list[str]:
+    if vol <= 143: guess = 1
+    elif vol <= 287: guess = 2
+    elif vol <= 431: guess = 3
+    elif vol <= 719: guess = 4
+    elif vol <= 1007: guess = 5
+    elif vol <= 1061: guess = 6
+    elif vol <= 1115: guess = 7
+    elif vol <= 1169: guess = 8
+    elif vol <= 1313: guess = 9
+    elif vol <= 1601: guess = 10
+    elif vol <= 1655: guess = 11
+    elif vol <= 1919: guess = 12
+    elif vol <= 2045: guess = 13
+    elif vol <= 2189: guess = 14
+    elif vol <= 2405: guess = 15
+    elif vol <= 2621: guess = 16
+    elif vol <= 2837: guess = 17
+    elif vol <= 3053: guess = 18
+    else:
+        guess = 19 + (vol - 3054) // 216
+
+    nums = []
+    for delta in (0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5):
+        b = guess + delta
+        if b >= 1:
+            nums.append(f"{b:02d}")
+    return nums
 
 
 async def fetch_wb_data(article: int) -> dict | None:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json"}
-    timeout = aiohttp.ClientTimeout(total=12)
+    timeout = aiohttp.ClientTimeout(total=15)
     vol = article // 100000
     part = article // 1000
-    basket = get_wb_basket(vol)
-
-    card_cdn = f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{article}/info/ru/card.json"
 
     async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
         name = "Товар WB"
         brand = "Бренд WB"
         root_id = article
 
-        try:
-            async with session.get(card_cdn) as resp:
-                if resp.status == 200:
-                    c_data = await resp.json(content_type=None)
-                    name = c_data.get("imt_name", name)
-                    brand = c_data.get("selling", {}).get("brand_name", brand)
-                    root_id = c_data.get("imt_id", article)
-        except Exception:
-            pass
+        for basket in candidate_baskets(vol):
+            card_cdn = f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{article}/info/ru/card.json"
+            try:
+                async with session.get(card_cdn) as resp:
+                    if resp.status == 200:
+                        c_data = await resp.json(content_type=None)
+                        name = c_data.get("imt_name", name)
+                        brand = c_data.get("selling", {}).get("brand_name", brand)
+                        root_id = c_data.get("imt_id", article)
+                        break
+            except Exception:
+                continue
 
         reviews_list = []
         for sub in ("feedbacks1.", "feedbacks2."):
