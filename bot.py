@@ -1,13 +1,19 @@
 import asyncio
-import io
 import os
-import random
+import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+import aiohttp
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, BufferedInputFile
-from aiogram.utils.media_group import MediaGroupBuilder
+from aiogram.types import (
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    LabeledPrice,
+    PreCheckoutQuery,
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from openai import AsyncOpenAI
@@ -16,7 +22,8 @@ from openai import AsyncOpenAI
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 VSEGPT_API_KEY = os.getenv("VSEGPT_API_KEY", "")
 ADMIN_IDS = (1273001338, 610828745)
-DECKS_DIR = "decks"
+# Укажи юзернейм отдельного рабочего аккаунта "кожаного ассистента" (с @)
+ASSISTANT_USERNAME = "@kata_nakata"
 # =============================================
 
 bot = Bot(token=BOT_TOKEN)
@@ -25,244 +32,339 @@ dp = Dispatcher()
 ai_client = AsyncOpenAI(
     api_key=VSEGPT_API_KEY,
     base_url="https://api.vsegpt.ru/v1",
-    timeout=45.0
+    timeout=60.0,
 )
 
-conn = sqlite3.connect("taro_bot.db")
+conn = sqlite3.connect("wb_scout.db")
 cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     username TEXT,
-    free_readings INTEGER DEFAULT 1
+    scans_left INTEGER DEFAULT 2
 )
 """)
 conn.commit()
 
-TAROT_DECK = [
-    "Шут", "Маг", "Верховная Жрица", "Императрица", "Император", "Иерофант",
-    "Влюблённые", "Колесница", "Сила", "Отшельник", "Колесо Фортуны", "Справедливость",
-    "Повешенный", "Смерть", "Умеренность", "Дьявол", "Башня", "Звезда", "Луна",
-    "Солнце", "Суд", "Мир",
-    "Туз Жезлов", "Двойка Жезлов", "Тройка Жезлов", "Четвёрка Жезлов", "Пятёрка Жезлов",
-    "Шестёрка Жезлов", "Семёрка Жезлов", "Восьмёрка Жезлов", "Девятка Жезлов", "Десятка Жезлов",
-    "Паж Жезлов", "Рыцарь Жезлов", "Королева Жезлов", "Король Жезлов",
-    "Туз Кубков", "Двойка Кубков", "Тройка Кубков", "Четвёрка Кубков", "Пятёрка Кубков",
-    "Шестёрка Кубков", "Семёрка Кубков", "Восьмёрка Кубков", "Девятка Кубков", "Десятка Кубков",
-    "Паж Кубков", "Рыцарь Кубков", "Королева Кубков", "Король Кубков",
-    "Туз Мечей", "Двойка Мечей", "Тройка Мечей", "Четвёрка Мечей", "Пятёрка Мечей",
-    "Шестёрка Мечей", "Семёрка Мечей", "Восьмёрка Мечей", "Девятка Мечей", "Десятка Мечей",
-    "Паж Мечей", "Рыцарь Мечей", "Королева Мечей", "Король Мечей",
-    "Туз Пентаклей", "Двойка Пентаклей", "Тройка Пентаклей", "Четвёрка Пентаклей", "Пятёрка Пентаклей",
-    "Шестёрка Пентаклей", "Семёрка Пентаклей", "Восьмёрка Пентаклей", "Девятка Пентаклей", "Десятка Пентаклей",
-    "Паж Пентаклей", "Рыцарь Пентаклей", "Королева Пентаклей", "Король Пентаклей"
-]
-
 SYSTEM_PROMPT = """
-Ты — чуткий, глубокий и мудрый таролог-психолог. Твоя задача — трактовать расклад Таро мягко, бережно, без запугивания, фатализма и шаблонных фраз из учебников.
-Используй карты как инструмент саморефлексии и поиска опоры.
-Структура ответа:
-1. Общая атмосфера расклада (2-3 предложения).
-2. Значение каждой выпавшей карты именно в контексте вопроса человека и их связка друг с другом.
-3. Практический совет или мягкое напутствие.
-Пиши живым, тёплым русским языком, разбивай текст на абзацы с уместными эмодзи. Не используй звёздочки для жирного шрифта.
+Ты — дерзкий, острый на язык и предельно точный ИИ-разведчик маркетплейса Wildberries.
+Твоя задача — без воды и общих фраз препарировать конкурента на основе переданных тебе свежих негативных и нейтральных отзывов (1-3 звезды) и паспорта товара.
+
+Стиль общения:
+- Уверенный, слегка ироничный искусственный интеллект, который презирает догадки и оперирует только фактами и цифрами.
+- Пиши живым русским языком с уместными эмодзи, чётко по структуре. Не используй звёздочки (**) для жирного шрифта, выделяй заголовки заглавными буквами или эмодзи.
+
+Обязательная структура ответа:
+1. ВЕРДИКТ РАЗВЕДКИ (2-3 резких предложения о реальном состоянии карточки: накрученный рейтинг или живой товар, где главная дыра).
+2. ТОП-5 ПРИЧИН НЕГАТИВА И ВОЗВРАТОВ (в процентах от проанализированной выборки жалоб, с конкретными деталями из текста отзывов — размер, швы, упаковка, комплектация, запах и т.д.).
+3. 3 ГОТОВЫХ ТРИГГЕРА ДЛЯ ОБЛОЖКИ ИНФОГРАФИКИ (конкретные короткие заголовки на главный слайд, которые бьют прямо в боли покупателей конкурента и перехватывают его трафик).
+4. ЧЕК-ЛИСТ ДОРАБОТКИ ТОВАРА И ОПИСАНИЯ (3 конкретных шага, что исправить перед закупкой или в карточке, чтобы держать рейтинг 4.8+).
 """
 
-class Form(StatesGroup):
-    waiting_ai_question = State()
-    waiting_live_request = State()
 
-def get_today_deck_path():
-    if not os.path.exists(DECKS_DIR):
-        return None
-    decks = sorted([
-        os.path.join(DECKS_DIR, d) for d in os.listdir(DECKS_DIR)
-        if os.path.isdir(os.path.join(DECKS_DIR, d))
-    ])
-    if not decks:
-        return None
-    day_of_year = datetime.now().timetuple().tm_yday
-    return decks[day_of_year % len(decks)]
+class ScanForm(StatesGroup):
+    waiting_article = State()
 
-def prepare_card_image(deck_path, card_index, is_reversed):
-    if not deck_path:
-        return None
-    for ext in (".jpg", ".jpeg", ".png", ".webp"):
-        img_path = os.path.join(deck_path, f"{card_index:02d}{ext}")
-        if os.path.exists(img_path):
-            with Image.open(img_path) as img:
-                if img.mode in ("RGBA", "P"):
-                    img = img.convert("RGB")
-                if is_reversed:
-                    img = img.rotate(180)
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=90)
-                buf.seek(0)
-                return BufferedInputFile(buf.read(), filename=f"card_{card_index:02d}.jpg")
-    return None
 
 def main_menu():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🔮 Быстрый расклад с ИИ (24/7)")],
-            [KeyboardButton(text="✋ Личный расклад от мастера (днём)")],
-            [KeyboardButton(text="🕸 Авторские ловцы снов")]
+            [KeyboardButton(text="🔍 Пробить конкурента по артикулу")],
+            [KeyboardButton(text="💳 Баланс и пополнение"), KeyboardButton(text="🤖 Хочу такого бота себе")],
         ],
-        resize_keyboard=True
+        resize_keyboard=True,
     )
+
+
+def buy_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⚡ 1 разбор — 20 ⭐ (~39 ₽)", callback_data="buy_1")],
+            [InlineKeyboardButton(text="🔥 10 разборов — 150 ⭐ (~290 ₽)", callback_data="buy_10")],
+            [InlineKeyboardButton(text="🚀 30 разборов — 350 ⭐ (~690 ₽)", callback_data="buy_30")],
+            [InlineKeyboardButton(text="👨‍💻 Оплата картой РФ / Бот под ключ", callback_data="contact_human")],
+        ]
+    )
+
+
+def extract_article(text: str) -> int | None:
+    if not text:
+        return None
+    match = re.search(r"catalog/(\d+)", text)
+    if match:
+        return int(match.group(1))
+    digits = re.findall(r"\b\d{6,12}\b", text)
+    if digits:
+        return int(digits[0])
+    return None
+
+
+async def fetch_wb_data(article: int) -> dict | None:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "*/*",
+    }
+    card_url = f"https://wb.ru{article}"
+
+    async with aiohttp.ClientSession(headers=headers) as session:
+        async with session.get(card_url, timeout=15) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+
+        products = data.get("data", {}).get("products", [])
+        if not products:
+            return None
+
+        prod = products[0]
+        name = prod.get("name", "Без названия")
+        brand = prod.get("brand", "Без бренда")
+        rating = prod.get("reviewRating", prod.get("rating", 0))
+        total_feedbacks = prod.get("feedbacks", 0)
+        root_id = prod.get("root")
+
+        price_u = 0
+        sizes = prod.get("sizes", [])
+        for s in sizes:
+            p = s.get("price", {}).get("product")
+            if p:
+                price_u = p // 100
+                break
+
+        reviews_list = []
+        if root_id:
+            for srv in ("feedbacks1.wb.ru", "feedbacks2.wb.ru"):
+                fb_url = f"https://{srv}/feedbacks/v1/{root_id}"
+                try:
+                    async with session.get(fb_url, timeout=15) as fb_resp:
+                        if fb_resp.status == 200:
+                            fb_json = await fb_resp.json()
+                            raw_fbs = fb_json.get("feedbacks") or []
+                            if raw_fbs:
+                                reviews_list = raw_fbs
+                                break
+                except Exception:
+                    continue
+
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=90)
+        filtered_reviews = []
+        neg_1_2 = 0
+        neu_3 = 0
+
+        for fb in reviews_list:
+            val = fb.get("productValuation", 5)
+            if val > 3:
+                continue
+
+            created_str = fb.get("createdDate", "")
+            try:
+                fb_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                if fb_dt < cutoff_date:
+                    continue
+            except Exception:
+                pass
+
+            text_parts = []
+            if fb.get("text"):
+                text_parts.append(fb["text"].strip())
+            if fb.get("pros"):
+                text_parts.append(f"Плюсы: {fb['pros'].strip()}")
+            if fb.get("cons"):
+                text_parts.append(f"Минусы: {fb['cons'].strip()}")
+
+            full_comment = " | ".join(text_parts)
+            if not full_comment:
+                continue
+
+            if val <= 2:
+                neg_1_2 += 1
+            else:
+                neu_3 += 1
+
+            filtered_reviews.append(f"[{val}★] {full_comment[:350]}")
+            if len(filtered_reviews) >= 200:
+                break
+
+        return {
+            "article": article,
+            "name": name,
+            "brand": brand,
+            "price": price_u,
+            "rating": rating,
+            "total_feedbacks": total_feedbacks,
+            "analyzed_count": len(filtered_reviews),
+            "neg_1_2": neg_1_2,
+            "neu_3": neu_3,
+            "reviews_text": "\n".join(filtered_reviews),
+        }
+
+
+def get_user_scans(user_id: int) -> int:
+    cursor.execute("SELECT scans_left FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    return row[0] if row else 0
+
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     cursor.execute(
-        "INSERT OR IGNORE INTO users (user_id, username, free_readings) VALUES (?, ?, 1)",
-        (message.from_user.id, message.from_user.username)
+        "INSERT OR IGNORE INTO users (user_id, username, scans_left) VALUES (?, ?, 2)",
+        (message.from_user.id, message.from_user.username),
     )
     conn.commit()
+    scans = get_user_scans(message.from_user.id)
+
     await message.answer(
-        "Добро пожаловать в Мастерскую Таро и Снов ✨\n\n"
-        "Здесь можно получить мгновенный разбор от ИИ-таролога (обученного на авторских записях мастера) "
-        "или записаться на живой глубокий расклад на реальной колоде.\n\n"
-        "🎁 У тебя есть 1 бесплатный тестовый расклад на 3 карты. Выбирай раздел в меню:",
-        reply_markup=main_menu()
-    )
-
-@dp.message(F.text == "🔮 Быстрый расклад с ИИ (24/7)")
-async def ai_reading_start(message: types.Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS:
-        cursor.execute("SELECT free_readings FROM users WHERE user_id = ?", (message.from_user.id,))
-        row = cursor.fetchone()
-        free_left = next(iter(row), 0) if row else 0
-
-        if free_left <= 0:
-            await message.answer(
-                "Бесплатный тестовый расклад уже использован ✨\n\n"
-                "Полный разбор на 3 карты от ИИ-таролога стоит 190 ₽."
-            )
-            return
-
-    await message.answer("Сформулируй и напиши свой вопрос (одной фразой или подробнее, как чувствуешь):")
-    await state.set_state(Form.waiting_ai_question)
-
-@dp.message(Form.waiting_ai_question)
-async def process_ai_question(message: types.Message, state: FSMContext):
-    question = message.text
-    await state.clear()
-    wait_msg = await message.answer("Тасую колоду дня и настраиваюсь на твой вопрос... 🕯")
-
-    drawn_indices = random.sample(range(len(TAROT_DECK)), 3)
-    deck_path = get_today_deck_path()
-
-    cards_lines = []
-    media_group = MediaGroupBuilder()
-    images_found = 0
-
-    for idx in drawn_indices:
-        card_name = TAROT_DECK[idx]
-        is_rev = random.choice([False, True])
-        pos_text = "перевёрнутое положение" if is_rev else "прямое положение"
-        cards_lines.append(f"— {card_name} ({pos_text})")
-
-        card_file = prepare_card_image(deck_path, idx, is_rev)
-        if card_file:
-            images_found += 1
-            caption = f"🃏 {card_name} ({pos_text})" if images_found == 1 else None
-            media_group.add_photo(media=card_file, caption=caption)
-
-    cards_text = "\n".join(cards_lines)
-
-    try:
-        response = await ai_client.chat.completions.create(
-            model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Вопрос человека: {question}\n\nВыпали карты:\n{cards_text}"}
-            ],
-            temperature=0.7
-        )
-        if isinstance(response, str):
-            raise Exception(f"Текст от сервера: {response}")
-
-        first_choice = next(iter(response.choices))
-        interpretation = first_choice.message.content
-
-        if message.from_user.id not in ADMIN_IDS:
-            cursor.execute("UPDATE users SET free_readings = free_readings - 1 WHERE user_id = ?", (message.from_user.id,))
-            conn.commit()
-
-        if images_found == 3:
-            await wait_msg.delete()
-            await message.answer_media_group(media=media_group.build())
-            full_text = (
-                f"🃏 Выпавшие карты:\n{cards_text}\n\n{interpretation}\n\n"
-                f"Консультация носит информационно-рекомендательный характер."
-            )
-            is_first = False
-        else:
-            full_text = (
-                f"🃏 Твой расклад:\n{cards_text}\n\n{interpretation}\n\n"
-                f"Консультация носит информационно-рекомендательный характер."
-            )
-            is_first = True
-
-        while len(full_text) > 0:
-            if len(full_text) <= 3000:
-                chunk = full_text
-                full_text = ""
-            else:
-                split_pos = full_text.rfind("\n", 0, 3000)
-                if split_pos == -1:
-                    split_pos = full_text.rfind(" ", 0, 3000)
-                if split_pos == -1:
-                    split_pos = 3000
-                chunk = full_text[:split_pos]
-                full_text = full_text[split_pos:].lstrip()
-
-            if is_first:
-                await wait_msg.edit_text(chunk)
-                is_first = False
-            else:
-                await asyncio.sleep(0.4)
-                await message.answer(chunk)
-
-    except Exception as e:
-        print("ОШИБКА ИИ:", e)
-        await wait_msg.edit_text(f"Ошибка: {str(e)[:500]}")
-
-@dp.message(F.text == "✋ Личный расклад от мастера (днём)")
-async def live_reading_start(message: types.Message, state: FSMContext):
-    await message.answer(
-        "Живой расклад выполняется мастером вручную на реальной колоде в дневное время "
-        "(ответ приходит в виде фото карт и подробного голосового сообщения).\n\n"
-        "Стоимость: 1 500 ₽.\n"
-        "Опиши кратко свою ситуацию или вопрос, чтобы мы передали заявку мастеру:"
-    )
-    await state.set_state(Form.waiting_live_request)
-
-@dp.message(Form.waiting_live_request)
-async def process_live_request(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer(
-        "Заявка принята ✨ Мы свяжемся с тобой в ближайшее время для подтверждения окошка и отправки реквизитов для оплаты."
+        "🤖 На связи ИИ-разведчик Wildberries.\n\n"
+        "Пока конкуренты рисуют красивые обложки, я за 20 секунд вскрываю их свежие отзывы (1–3★ за последние 90 дней), "
+        "считаю реальные причины возвратов и выдаю готовые триггеры, чтобы забрать их покупателей.\n\n"
+        f"🎁 На твоём балансе: {scans} бесплатных сканирования.\n"
+        "Жми кнопку ниже и кидай артикул или ссылку на любой товар WB:",
+        reply_markup=main_menu(),
     )
 
 
-    for admin_id in ADMIN_IDS:
-        if admin_id != 0:
-            await bot.send_message(
-                admin_id,
-                f"📥 Новая заявка на живой расклад от @{message.from_user.username} (ID: {message.from_user.id}):\n\n{message.text}"
-            )
-
-@dp.message(F.text == "🕸 Авторские ловцы снов")
-async def dreamcatchers_info(message: types.Message):
+@dp.message(F.text == "💳 Баланс и пополнение")
+async def show_balance(message: types.Message):
+    scans = "Безлимит (Админ)" if message.from_user.id in ADMIN_IDS else get_user_scans(message.from_user.id)
     await message.answer(
-        "Каждый ловец снов плетётся вручную в единственном экземпляре на основе из натуральных веток 🌿\n\n"
-        "Посмотреть актуальные работы в наличии и заказать индивидуальный оберег можно в нашем канале мастерской."
+        f"📊 Доступно разборов: {scans}\n\n"
+        "Чтобы мои серверы и нейросети не ушли в спящий режим, выбирай пакет сканирований (оплата в Telegram Stars в 2 клика):",
+        reply_markup=buy_keyboard(),
     )
 
-async def main():
-    print("Бот запущен...")
-    await dp.start_polling(bot)
+
+@dp.message(F.text == "🤖 Хочу такого бота себе")
+async def want_own_bot(message: types.Message):
+    await message.answer(
+        "Вижу деловой подход. Я — чистый код, моя работа — потрошить карточки конкурентов, а с рублями, договорами и внедрением под ключ мне возиться лень.\n\n"
+        f"Поэтому переключаю тебя на моего кожаного ассистента ({ASSISTANT_USERNAME}). "
+        "Напиши ему в личку — он быстро обсудит с тобой финансовую часть и запустит такого же личного разведчика под твой бренд или агентство."
+    )
+
+
+@dp.callback_query(F.data == "contact_human")
+async def cb_contact_human(callback: types.CallbackQuery):
+    await callback.answer()
+    await callback.message.answer(
+        f"С рублями и индивидуальными тарифами разбирается мой кожаный ассистент: {ASSISTANT_USERNAME}\n"
+        "Напиши ему напрямую — он подключит нужный пакет по карте РФ или обсудит внедрение бота под ключ."
+    )
+
+
+@dp.callback_query(F.data.startswith("buy_"))
+async def process_buy(callback: types.CallbackQuery):
+    await callback.answer()
+    pack = callback.data.split("_")[1]
+    tariffs = {
+        "1": ("1 разбор конкурента WB", "Мгновенное пополнение на 1 глубокий скан карточки", 20, "pack_1"),
+        "10": ("Пакет «На нишу» (10 разборов)", "10 глубоких сканов карточек конкурентов WB", 150, "pack_10"),
+        "30": ("Пакет «Профи» (30 разборов)", "30 глубоких сканов карточек конкурентов WB", 350, "pack_30"),
+    }
+    if pack not in tariffs:
+        return
+
+    title, desc, stars_amount, payload = tariffs[pack]
+
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+await callback.message.answer_invoice(
+title=title,
+description=desc,
+prices=[LabeledPrice(label=title, amount=stars_amount)],
+provider_token="",
+payload=payload,
+currency="XTR",
+)
+@dp.pre_checkout_query()
+async def pre_checkout(pre_checkout_q: PreCheckoutQuery):
+await bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
+@dp.message(F.successful_payment)
+async def successful_payment(message: types.Message):
+payload = message.successful_payment.invoice_payload
+add_map = {"pack_1": 1, "pack_10": 10, "pack_30": 30}
+added = add_map.get(payload, 0)
+cursor.execute("UPDATE users SET scans_left = scans_left + ? WHERE user_id = ?", (added, message.from_user.id))
+conn.commit()
+new_bal = get_user_scans(message.from_user.id)
+await message.answer(
+f"⚡ Энергия на серверы поступила! Начислено разборов: +{added}.\n"
+f"Текущий баланс: {new_bal}. Кидай артикул или ссылку на WB!"
+)
+@dp.message(F.text == "🔍 Пробить конкурента по артикулу")
+async def ask_article(message: types.Message, state: FSMContext):
+if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) <= 0:
+await message.answer(
+"Бесплатный лимит выжат на 100%.\n\n"
+"Чтобы я не ушёл в спящий режим, закинь пару звёзд на мои серверы — выбирай пакет ниже:",
+reply_markup=buy_keyboard(),
+)
+return
+await message.answer("Кидай артикул товара WB (например, 148920312) или прямую ссылку на карточку:")
+await state.set_state(ScanForm.waiting_article)
+@dp.message(ScanForm.waiting_article)
+@dp.message(F.text.regexp(r"(wildberries.ru/catalog/\d+|^\d{6,12}$)"))
+async def analyze_competitor(message: types.Message, state: FSMContext):
+await state.clear()
+article = extract_article(message.text)
+if not article:
+await message.answer("Не вижу нормального артикула. Пришли цифры (например, 148920312) или ссылку на товар WB.")
+return
+if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) <= 0:
+await message.answer(
+"На балансе 0 сканирований. Пополни энергию серверов, чтобы продолжить разведку:",
+reply_markup=buy_keyboard(),
+)
+return
+wait_msg = await message.answer(f"🛰 Подключаюсь к WB, выгружаю карточку {article} и фильтрую свежий негатив за 90 дней...")
+wb_info = await fetch_wb_data(article)
+if not wb_info:
+await wait_msg.edit_text("❌ Не удалось достать карточку с таким артикулом. Проверь цифры и попробуй ещё раз.")
+return
+passport = (
+f"📦 ПАСПОРТ ОБЪЕКТА (WB: {wb_info['article']})\n"
+f"• Товар: {wb_info['name']} ({wb_info['brand']})\n"
+f"• Цена: {wb_info['price']} ₽ | Рейтинг: {wb_info['rating']}★\n"
+f"• Всего отзывов в карточке: {wb_info['total_feedbacks']}\n"
+f"• Взято в разбор (1–3★ за 90 дней): {wb_info['analyzed_count']} шт. "
+f"(из них 1–2★: {wb_info['neg_1_2']}, 3★: {wb_info['neu_3']})"
+)
+if wb_info["analyzed_count"] == 0:
+await wait_msg.edit_text(
+f"{passport}\n\n"
+"✅ За последние 90 дней у этого товара вообще нет свежих негативных отзывов (1–3★). "
+"Либо партия идеальная, либо карточка совсем свежая — разбирать пока нечего, списание не засчитано!"
+)
+return
+user_prompt = (
+f"Данные товара:\n{passport}\n\n"
+f"Список свежих негативных и нейтральных отзывов (1-3 звезды):\n{wb_info['reviews_text']}"
+)
+try:
+response = await ai_client.chat.completions.create(
+model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
+messages=[
+{"role": "system", "content": SYSTEM_PROMPT},
+{"role": "user", "content": user_prompt},
+],
+temperature=0.6,
+)
+analysis = response.choices[0].message.content
+if message.from_user.id not in ADMIN_IDS:
+cursor.execute("UPDATE users SET scans_left = scans_left - 1 WHERE user_id = ?", (message.from_user.id,))
+conn.commit()
+await wait_msg.delete()
+full_report = f"{passport}\n\n{analysis}"
+if len(full_report) <= 4000:
+await message.answer(full_report, reply_markup=main_menu())
+else:
+await message.answer(passport)
+await message.answer(analysis[:4000], reply_markup=main_menu())
+except Exception as e:
+await wait_msg.edit_text(f"⚠️ Сбой нейроядра при анализе ({e}). Попытка не списана, попробуй через минуту.")
+async def main():
+await dp.start_polling(bot)
+if name == "main":
+asyncio.run(main())
