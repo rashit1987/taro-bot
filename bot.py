@@ -280,7 +280,7 @@ currency="XTR",
 )
 @dp.pre_checkout_query()
 async def pre_checkout(pre_checkout_q: PreCheckoutQuery):
-await bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
+    await bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
 @dp.message(F.successful_payment)
 async def successful_payment(message: types.Message):
 payload = message.successful_payment.invoice_payload
