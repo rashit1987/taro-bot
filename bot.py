@@ -232,6 +232,12 @@ async def cmd_start(message: types.Message):
         (message.from_user.id, message.from_user.username),
     )
     conn.commit()
+        if message.from_user.id not in ADMIN_IDS:
+        try:
+            await bot.send_message(1273001338, f"🆕 Новый юзер: @{message.from_user.username} (ID: {message.from_user.id})")
+        except Exception:
+            pass
+
     scans = get_user_scans(message.from_user.id)
 
     await message.answer(
@@ -389,6 +395,10 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
         if message.from_user.id not in ADMIN_IDS:
             cursor.execute("UPDATE users SET scans_left = scans_left - 1 WHERE user_id = ?", (message.from_user.id,))
             conn.commit()
+            try:
+                await bot.send_message(1273001338, f"🔍 Разбор WB: {article} от @{message.from_user.username}")
+            except Exception:
+                pass
 
         await wait_msg.delete()
         full_report = f"{passport}\n\n{analysis}"
@@ -402,6 +412,22 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
     except Exception as e:
         await wait_msg.edit_text(f"⚠️ Сбой нейроядра при анализе ({e}). Попытка не списана, попробуй через минуту.")
 
+@dp.message(F.text == "/stats")
+async def admin_stats(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    cursor.execute("SELECT COUNT(*) FROM users")
+    total_users = next(iter(cursor.fetchone()), 0)
+    cursor.execute("SELECT COUNT(*) FROM users WHERE scans_left < 2")
+    active_users = next(iter(cursor.fetchone()), 0)
+    cursor.execute("SELECT COUNT(*) FROM users WHERE scans_left > 2")
+    paid_users = next(iter(cursor.fetchone()), 0)
+    await message.answer(
+        f"📊 СТАТИСТИКА БОТА:\n"
+        f"• Всего запустили /start: {total_users}\n"
+        f"• Сделали хотя бы 1 разбор: {active_users}\n"
+        f"• Пополнили баланс: {paid_users}"
+    )
 
 async def main():
     await dp.start_polling(bot)
