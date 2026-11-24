@@ -341,13 +341,14 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
         f"• Взято в разбор (1–3★ за 90 дней): {wb_info['analyzed_count']} шт. "
         f"(из них 1–2★: {wb_info['neg_1_2']}, 3★: {wb_info['neu_3']})"
 )
-if wb_info["analyzed_count"] == 0:
-await wait_msg.edit_text(
-f"{passport}\n\n"
-"✅ За последние 90 дней у этого товара вообще нет свежих негативных отзывов (1–3★). "
-"Либо партия идеальная, либо карточка совсем свежая — разбирать пока нечего, списание не засчитано!"
-)
-return
+    if wb_info["analyzed_count"] == 0:
+        await wait_msg.edit_text(
+            f"{passport}\n\n"
+            "✅ За последние 90 дней у этого товара вообще нет свежих негативных отзывов (1–3★). "
+            "Либо партия идеальная, либо карточка совсем свежая — разбирать пока нечего, списание не засчитано!"
+        )
+        return
+
 user_prompt = (
 f"Данные товара:\n{passport}\n\n"
 f"Список свежих негативных и нейтральных отзывов (1-3 звезды):\n{wb_info['reviews_text']}"
