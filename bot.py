@@ -232,7 +232,7 @@ async def cmd_start(message: types.Message):
         (message.from_user.id, message.from_user.username),
     )
     conn.commit()
-        if message.from_user.id not in ADMIN_IDS:
+    if message.from_user.id not in ADMIN_IDS:
         try:
             await bot.send_message(1273001338, f"🆕 Новый юзер: @{message.from_user.username} (ID: {message.from_user.id})")
         except Exception:
