@@ -349,36 +349,42 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
         )
         return
 
-user_prompt = (
-f"Данные товара:\n{passport}\n\n"
-f"Список свежих негативных и нейтральных отзывов (1-3 звезды):\n{wb_info['reviews_text']}"
-)
-try:
-response = await ai_client.chat.completions.create(
-model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
-messages=[
-{"role": "system", "content": SYSTEM_PROMPT},
-{"role": "user", "content": user_prompt},
-],
-temperature=0.6,
-)
-analysis = response.choices.message.content
-if message.from_user.id not in ADMIN_IDS:
-cursor.execute("UPDATE users SET scans_left = scans_left - 1 WHERE user_id = ?", (message.from_user.id,))
-conn.commit()
-await wait_msg.delete()
-full_report = f"{passport}\n\n{analysis}"
-if len(full_report) <= 4000:
-await message.answer(full_report, reply_markup=main_menu())
-else:
-await message.answer(passport)
-await message.answer(analysis[:4000], reply_markup=main_menu())
-except Exception as e:
-await wait_msg.edit_text(f"⚠️ Сбой нейроядра при анализе ({e}). Попытка не списана, попробуй через минуту.")
+    user_prompt = (
+        f"Данные товара:\n{passport}\n\n"
+        f"Список свежих негативных и нейтральных отзывов (1-3 звезды):\n{wb_info['reviews_text']}"
+    )
+
+    try:
+        response = await ai_client.chat.completions.create(
+            model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.6,
+        )
+        analysis = response.choices[0].message.content
+
+        if message.from_user.id not in ADMIN_IDS:
+            cursor.execute("UPDATE users SET scans_left = scans_left - 1 WHERE user_id = ?", (message.from_user.id,))
+            conn.commit()
+
+        await wait_msg.delete()
+        full_report = f"{passport}\n\n{analysis}"
+
+        if len(full_report) <= 4000:
+            await message.answer(full_report, reply_markup=main_menu())
+        else:
+            await message.answer(passport)
+            await message.answer(analysis[:4000], reply_markup=main_menu())
+
+    except Exception as e:
+        await wait_msg.edit_text(f"⚠️ Сбой нейроядра при анализе ({e}). Попытка не списана, попробуй через минуту.")
+
+
 async def main():
-await dp.start_polling(bot)
-if name == "main":
-asyncio.run(main())   
+    await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
