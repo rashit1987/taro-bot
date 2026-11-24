@@ -104,7 +104,12 @@ async def fetch_wb_data(article: int) -> dict | None:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*",
     }
-    card_url = f"https://wb.ru{article}"
+    async def fetch_wb_data(article: int) -> dict | None:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "*/*",
+    }
+    card_url = "https://" + "card." + "wb.ru" + "/cards/v2/detail?appType=1&curr=rub&dest=-1257786&nm=" + str(article)
 
     async with aiohttp.ClientSession(headers=headers) as session:
         async with session.get(card_url, timeout=15) as resp:
@@ -133,8 +138,8 @@ async def fetch_wb_data(article: int) -> dict | None:
 
         reviews_list = []
         if root_id:
-            for srv in ("feedbacks1.wb.ru", "feedbacks2.wb.ru"):
-                fb_url = f"https://{srv}/feedbacks/v1/{root_id}"
+            for sub in ("feedbacks1.", "feedbacks2."):
+                fb_url = "https://" + sub + "wb.ru" + "/feedbacks/v1/" + str(root_id)
                 try:
                     async with session.get(fb_url, timeout=15) as fb_resp:
                         if fb_resp.status == 200:
@@ -145,6 +150,7 @@ async def fetch_wb_data(article: int) -> dict | None:
                                 break
                 except Exception:
                     continue
+
 
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=90)
         filtered_reviews = []
