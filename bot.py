@@ -225,29 +225,55 @@ def get_user_scans(user_id: int) -> int:
     return next(iter(row), 0) if row else 0
 
 
+def get_user_role(user_id: int) -> str:
+    cursor.execute("SELECT role FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    val = next(iter(row), "seller") if row else "seller"
+    return val if val in ("seller", "buyer") else "seller"
+
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    cursor.execute(
-        "INSERT OR IGNORE INTO users (user_id, username, scans_left) VALUES (?, ?, 2)",
-        (message.from_user.id, message.from_user.username),
-    )
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, username, scans_left, role) VALUES (?, ?, 2, 'seller')", (message.from_user.id, message.from_user.username))
     conn.commit()
     if message.from_user.id not in ADMIN_IDS:
         try:
             await bot.send_message(1273001338, f"🆕 Новый юзер: @{message.from_user.username} (ID: {message.from_user.id})")
         except Exception:
             pass
-
     scans = get_user_scans(message.from_user.id)
-
     await message.answer(
-        "🤖 На связи ИИ-разведчик Wildberries.\n\n"
-        "Пока конкуренты рисуют красивые обложки, я за 20 секунд вскрываю их свежие отзывы (1–3★ за последние 90 дней), "
-        "считаю реальные причины возвратов и выдаю готовые триггеры, чтобы забрать их покупателей.\n\n"
-        f"🎁 На твоём балансе: {scans} бесплатных сканирования.\n"
-        "Жми кнопку ниже и кидай артикул или ссылку на любой товар WB:",
-        reply_markup=main_menu(),
+        "🤖 На связи ИИ-разведчик Wildberries!\n\n"
+        "За 15 секунд вскрываю свежие отзывы (1–3★ за 90 дней) и показываю реальную картину о любом товаре.\n"
+        f"🎁 На балансе: {scans} бесплатных проверки.\n\n"
+        "Выбери, кто ты, чтобы я настроил формат отчёта под тебя:",
+        reply_markup=role_keyboard(),
     )
+    await message.answer("Или сразу жми кнопку в меню ниже и кидай артикул WB 👇", reply_markup=main_menu())
+
+@dp.callback_query(F.data.startswith("set_role_"))
+async def cb_set_role(callback: types.CallbackQuery):
+    await callback.answer()
+    role = "buyer" if callback.data.endswith("buyer") else "seller"
+    cursor.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, callback.from_user.id))
+    conn.commit()
+    label = "🛍 Покупатель (честная проверка перед покупкой)" if role == "buyer" else "📊 Селлер / менеджер (анализ конкурентов и триггеры)"
+    await callback.message.answer(f"✅ Режим переключён: {label}.\nТеперь кидай артикул или ссылку на товар WB!", reply_markup=main_menu())
+
+@dp.message(F.text.in_(["📊 Режим: Селлер", "🛍 Режим: Покупатель"]))
+async def switch_role_btn(message: types.Message):
+    role = "buyer" if "Покупатель" in message.text else "seller"
+    cursor.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, message.from_user.id))
+    conn.commit()
+    label = "🛍 Покупатель (честная проверка перед покупкой)" if role == "buyer" else "📊 Селлер / менеджер (анализ конкурентов)"
+    await message.answer(f"✅ Включён режим: {label}.\nКидай артикул или ссылку на товар WB!", reply_markup=main_menu())
+
+@dp.message(F.text.in_(["🔍 Пробить товар по артикулу", "🔍 Пробить конкурента по артикулу"]))
+async def ask_article(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) <= 0:
+        await message.answer("Бесплатный лимит исчерпан. Выбирай пакет ниже:", reply_markup=buy_keyboard())
+        return
+    await message.answer("Кидай артикул товара WB (например, 207509051) или прямую ссылку на карточку:")
+    await state.set_state(ScanForm.waiting_article)
 
 
 @dp.message(F.text == "💳 Баланс и пополнение")
