@@ -95,7 +95,7 @@ def extract_article(text: str) -> int | None:
         return int(match.group(1))
     digits = re.findall(r"\b\d{6,12}\b", text)
     if digits:
-        return int(digits[0])
+        return int(digits)
     return None
 
 
@@ -116,7 +116,7 @@ async def fetch_wb_data(article: int) -> dict | None:
         if not products:
             return None
 
-        prod = products[0]
+        prod = products
         name = prod.get("name", "Без названия")
         brand = prod.get("brand", "Без бренда")
         rating = prod.get("reviewRating", prod.get("rating", 0))
@@ -202,7 +202,7 @@ async def fetch_wb_data(article: int) -> dict | None:
 def get_user_scans(user_id: int) -> int:
     cursor.execute("SELECT scans_left FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
-    return row[0] if row else 0
+    return row if row else 0
 
 
 @dp.message(CommandStart())
@@ -255,7 +255,7 @@ async def cb_contact_human(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("buy_"))
 async def process_buy(callback: types.CallbackQuery):
     await callback.answer()
-    pack = callback.data.split("_")[1]
+    pack = callback.data.split("_")
     tariffs = {
         "1": ("1 разбор конкурента WB", "Мгновенное пополнение на 1 глубокий скан карточки", 20, "pack_1"),
         "10": ("Пакет «На нишу» (10 разборов)", "10 глубоких сканов карточек конкурентов WB", 150, "pack_10"),
@@ -265,19 +265,16 @@ async def process_buy(callback: types.CallbackQuery):
         return
 
     title, desc, stars_amount, payload = tariffs[pack]
+    await callback.message.answer_invoice(
+        title=title,
+        description=desc,
+        prices=[LabeledPrice(label=title, amount=stars_amount)],
+        provider_token="",
+        payload=payload,
+        currency="XTR",
+    )
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
-
-await callback.message.answer_invoice(
-title=title,
-description=desc,
-prices=[LabeledPrice(label=title, amount=stars_amount)],
-provider_token="",
-payload=payload,
-currency="XTR",
-)
 @dp.pre_checkout_query()
 async def pre_checkout(pre_checkout_q: PreCheckoutQuery):
     await bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
@@ -343,52 +340,44 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
         f"• Всего отзывов в карточке: {wb_info['total_feedbacks']}\n"
         f"• Взято в разбор (1–3★ за 90 дней): {wb_info['analyzed_count']} шт. "
         f"(из них 1–2★: {wb_info['neg_1_2']}, 3★: {wb_info['neu_3']})"
-    )
-
-    if wb_info["analyzed_count"] == 0:
-        await wait_msg.edit_text(
-            f"{passport}\n\n"
-            "✅ За последние 90 дней у этого товара вообще нет свежих негативных отзывов (1–3★). "
-            "Либо партия идеальная, либо карточка совсем свежая — разбирать пока нечего, списание не засчитано!"
-        )
-        return
-
-    user_prompt = (
-        f"Данные товара:\n{passport}\n\n"
-        f"Список свежих негативных и нейтральных отзывов (1-3 звезды):\n{wb_info['reviews_text']}"
-    )
-
-    try:
-        response = await ai_client.chat.completions.create(
-            model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.6,
-        )
-        analysis = response.choices[0].message.content
-
-        if message.from_user.id not in ADMIN_IDS:
-            cursor.execute("UPDATE users SET scans_left = scans_left - 1 WHERE user_id = ?", (message.from_user.id,))
-            conn.commit()
-
-        await wait_msg.delete()
-        full_report = f"{passport}\n\n{analysis}"
-
-        if len(full_report) <= 4000:
-            await message.answer(full_report, reply_markup=main_menu())
-        else:
-            await message.answer(passport)
-            await message.answer(analysis[:4000], reply_markup=main_menu())
-
-    except Exception as e:
-        await wait_msg.edit_text(f"⚠️ Сбой нейроядра при анализе ({e}). Попытка не списана, попробуй через минуту.")
-
-
+)
+if wb_info["analyzed_count"] == 0:
+await wait_msg.edit_text(
+f"{passport}\n\n"
+"✅ За последние 90 дней у этого товара вообще нет свежих негативных отзывов (1–3★). "
+"Либо партия идеальная, либо карточка совсем свежая — разбирать пока нечего, списание не засчитано!"
+)
+return
+user_prompt = (
+f"Данные товара:\n{passport}\n\n"
+f"Список свежих негативных и нейтральных отзывов (1-3 звезды):\n{wb_info['reviews_text']}"
+)
+try:
+response = await ai_client.chat.completions.create(
+model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
+messages=[
+{"role": "system", "content": SYSTEM_PROMPT},
+{"role": "user", "content": user_prompt},
+],
+temperature=0.6,
+)
+analysis = response.choices.message.content
+if message.from_user.id not in ADMIN_IDS:
+cursor.execute("UPDATE users SET scans_left = scans_left - 1 WHERE user_id = ?", (message.from_user.id,))
+conn.commit()
+await wait_msg.delete()
+full_report = f"{passport}\n\n{analysis}"
+if len(full_report) <= 4000:
+await message.answer(full_report, reply_markup=main_menu())
+else:
+await message.answer(passport)
+await message.answer(analysis[:4000], reply_markup=main_menu())
+except Exception as e:
+await wait_msg.edit_text(f"⚠️ Сбой нейроядра при анализе ({e}). Попытка не списана, попробуй через минуту.")
 async def main():
-    await dp.start_polling(bot)
-
+await dp.start_polling(bot)
+if name == "main":
+asyncio.run(main())   
 
 if __name__ == "__main__":
     asyncio.run(main())
