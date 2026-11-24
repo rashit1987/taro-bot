@@ -162,13 +162,15 @@ async def fetch_wb_data(article: int) -> dict | None:
         if not reviews_list and name == "Товар WB":
             return None
 
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=90)
+                cutoff_date = datetime.now(timezone.utc) - timedelta(days=90)
         filtered_reviews = []
         neg_1_2 = 0
         neu_3 = 0
+        all_vals = []
 
         for fb in reviews_list:
             val = fb.get("productValuation", 5)
+            all_vals.append(val)
             if val > 3:
                 continue
             created_str = fb.get("createdDate", "")
@@ -200,12 +202,14 @@ async def fetch_wb_data(article: int) -> dict | None:
             if len(filtered_reviews) >= 200:
                 break
 
+        avg_rating = round(sum(all_vals) / len(all_vals), 2) if all_vals else "—"
+
         return {
             "article": article,
             "name": name,
             "brand": brand,
             "price": "по карте WB",
-            "rating": "—",
+            "rating": avg_rating,
             "total_feedbacks": len(reviews_list),
             "analyzed_count": len(filtered_reviews),
             "neg_1_2": neg_1_2,
@@ -352,7 +356,7 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
     passport = (
         f"📦 ПАСПОРТ ОБЪЕКТА (WB: {wb_info['article']})\n"
         f"• Товар: {wb_info['name']} ({wb_info['brand']})\n"
-        f"• Цена: {wb_info['price']} ₽ | Рейтинг: {wb_info['rating']}★\n"
+        f"• Цена: {wb_info['price']} | Средний рейтинг: {wb_info['rating']}★\n"
         f"• Всего отзывов в карточке: {wb_info['total_feedbacks']}\n"
         f"• Взято в разбор (1–3★ за 90 дней): {wb_info['analyzed_count']} шт. "
         f"(из них 1–2★: {wb_info['neg_1_2']}, 3★: {wb_info['neu_3']})"
