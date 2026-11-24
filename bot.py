@@ -116,7 +116,7 @@ async def fetch_wb_data(article: int) -> dict | None:
         if not products:
             return None
 
-        prod = products
+        prod = next(iter(products))
         name = prod.get("name", "Без названия")
         brand = prod.get("brand", "Без бренда")
         rating = prod.get("reviewRating", prod.get("rating", 0))
@@ -202,7 +202,7 @@ async def fetch_wb_data(article: int) -> dict | None:
 def get_user_scans(user_id: int) -> int:
     cursor.execute("SELECT scans_left FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
-    return row if row else 0
+    return next(iter(row), 0) if row else 0
 
 
 @dp.message(CommandStart())
@@ -255,7 +255,7 @@ async def cb_contact_human(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("buy_"))
 async def process_buy(callback: types.CallbackQuery):
     await callback.answer()
-    pack = callback.data.split("_")
+    pack = callback.data.replace("buy_", "")
     tariffs = {
         "1": ("1 разбор конкурента WB", "Мгновенное пополнение на 1 глубокий скан карточки", 20, "pack_1"),
         "10": ("Пакет «На нишу» (10 разборов)", "10 глубоких сканов карточек конкурентов WB", 150, "pack_10"),
@@ -363,7 +363,8 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
             ],
             temperature=0.6,
         )
-        analysis = response.choices[0].message.content
+        first_choice = next(iter(response.choices))
+        analysis = first_choice.message.content
 
         if message.from_user.id not in ADMIN_IDS:
             cursor.execute("UPDATE users SET scans_left = scans_left - 1 WHERE user_id = ?", (message.from_user.id,))
