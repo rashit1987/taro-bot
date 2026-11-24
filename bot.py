@@ -87,6 +87,15 @@ def role_keyboard():
             [InlineKeyboardButton(text="🛍 Я покупатель (проверить товар)", callback_data="set_role_buyer")],
         ]
     )
+def buy_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⚡ 1 разбор — 20 ⭐", callback_data="buy_1")],
+            [InlineKeyboardButton(text="🔥 10 разборов — 150 ⭐", callback_data="buy_10")],
+            [InlineKeyboardButton(text="🚀 30 разборов — 350 ⭐", callback_data="buy_30")],
+            [InlineKeyboardButton(text="💳 Оплатить картой РФ / СБП (написать ассистенту)", callback_data="contact_human")],
+        ]
+    )
 
 
 def extract_article(text: str) -> int | None:
