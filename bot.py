@@ -162,7 +162,7 @@ async def fetch_wb_data(article: int) -> dict | None:
         if not reviews_list and name == "Товар WB":
             return None
 
-                cutoff_date = datetime.now(timezone.utc) - timedelta(days=90)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=90)
         filtered_reviews = []
         neg_1_2 = 0
         neu_3 = 0
