@@ -104,11 +104,7 @@ async def fetch_wb_data(article: int) -> dict | None:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*",
     }
-    async def fetch_wb_data(article: int) -> dict | None:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "*/*",
-    }
+    
     card_url = "https://" + "card." + "wb.ru" + "/cards/v2/detail?appType=1&curr=rub&dest=-1257786&nm=" + str(article)
 
     async with aiohttp.ClientSession(headers=headers) as session:
