@@ -281,90 +281,114 @@ currency="XTR",
 @dp.pre_checkout_query()
 async def pre_checkout(pre_checkout_q: PreCheckoutQuery):
     await bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
+
+
 @dp.message(F.successful_payment)
 async def successful_payment(message: types.Message):
-payload = message.successful_payment.invoice_payload
-add_map = {"pack_1": 1, "pack_10": 10, "pack_30": 30}
-added = add_map.get(payload, 0)
-cursor.execute("UPDATE users SET scans_left = scans_left + ? WHERE user_id = ?", (added, message.from_user.id))
-conn.commit()
-new_bal = get_user_scans(message.from_user.id)
-await message.answer(
-f"⚡ Энергия на серверы поступила! Начислено разборов: +{added}.\n"
-f"Текущий баланс: {new_bal}. Кидай артикул или ссылку на WB!"
-)
+    payload = message.successful_payment.invoice_payload
+    add_map = {"pack_1": 1, "pack_10": 10, "pack_30": 30}
+    added = add_map.get(payload, 0)
+
+    cursor.execute("UPDATE users SET scans_left = scans_left + ? WHERE user_id = ?", (added, message.from_user.id))
+    conn.commit()
+    new_bal = get_user_scans(message.from_user.id)
+
+    await message.answer(
+        f"⚡ Энергия на серверы поступила! Начислено разборов: +{added}.\n"
+        f"Текущий баланс: {new_bal}. Кидай артикул или ссылку на WB!"
+    )
+
+
 @dp.message(F.text == "🔍 Пробить конкурента по артикулу")
 async def ask_article(message: types.Message, state: FSMContext):
-if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) <= 0:
-await message.answer(
-"Бесплатный лимит выжат на 100%.\n\n"
-"Чтобы я не ушёл в спящий режим, закинь пару звёзд на мои серверы — выбирай пакет ниже:",
-reply_markup=buy_keyboard(),
-)
-return
-await message.answer("Кидай артикул товара WB (например, 148920312) или прямую ссылку на карточку:")
-await state.set_state(ScanForm.waiting_article)
+    if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) <= 0:
+        await message.answer(
+            "Бесплатный лимит выжат на 100%.\n\n"
+            "Чтобы я не ушёл в спящий режим, закинь пару звёзд на мои серверы — выбирай пакет ниже:",
+            reply_markup=buy_keyboard(),
+        )
+        return
+
+    await message.answer("Кидай артикул товара WB (например, 148920312) или прямую ссылку на карточку:")
+    await state.set_state(ScanForm.waiting_article)
+
+
 @dp.message(ScanForm.waiting_article)
-@dp.message(F.text.regexp(r"(wildberries.ru/catalog/\d+|^\d{6,12}$)"))
+@dp.message(F.text.regexp(r"(wildberries\.ru/catalog/\d+|^\d{6,12}$)"))
 async def analyze_competitor(message: types.Message, state: FSMContext):
-await state.clear()
-article = extract_article(message.text)
-if not article:
-await message.answer("Не вижу нормального артикула. Пришли цифры (например, 148920312) или ссылку на товар WB.")
-return
-if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) <= 0:
-await message.answer(
-"На балансе 0 сканирований. Пополни энергию серверов, чтобы продолжить разведку:",
-reply_markup=buy_keyboard(),
-)
-return
-wait_msg = await message.answer(f"🛰 Подключаюсь к WB, выгружаю карточку {article} и фильтрую свежий негатив за 90 дней...")
-wb_info = await fetch_wb_data(article)
-if not wb_info:
-await wait_msg.edit_text("❌ Не удалось достать карточку с таким артикулом. Проверь цифры и попробуй ещё раз.")
-return
-passport = (
-f"📦 ПАСПОРТ ОБЪЕКТА (WB: {wb_info['article']})\n"
-f"• Товар: {wb_info['name']} ({wb_info['brand']})\n"
-f"• Цена: {wb_info['price']} ₽ | Рейтинг: {wb_info['rating']}★\n"
-f"• Всего отзывов в карточке: {wb_info['total_feedbacks']}\n"
-f"• Взято в разбор (1–3★ за 90 дней): {wb_info['analyzed_count']} шт. "
-f"(из них 1–2★: {wb_info['neg_1_2']}, 3★: {wb_info['neu_3']})"
-)
-if wb_info["analyzed_count"] == 0:
-await wait_msg.edit_text(
-f"{passport}\n\n"
-"✅ За последние 90 дней у этого товара вообще нет свежих негативных отзывов (1–3★). "
-"Либо партия идеальная, либо карточка совсем свежая — разбирать пока нечего, списание не засчитано!"
-)
-return
-user_prompt = (
-f"Данные товара:\n{passport}\n\n"
-f"Список свежих негативных и нейтральных отзывов (1-3 звезды):\n{wb_info['reviews_text']}"
-)
-try:
-response = await ai_client.chat.completions.create(
-model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
-messages=[
-{"role": "system", "content": SYSTEM_PROMPT},
-{"role": "user", "content": user_prompt},
-],
-temperature=0.6,
-)
-analysis = response.choices[0].message.content
-if message.from_user.id not in ADMIN_IDS:
-cursor.execute("UPDATE users SET scans_left = scans_left - 1 WHERE user_id = ?", (message.from_user.id,))
-conn.commit()
-await wait_msg.delete()
-full_report = f"{passport}\n\n{analysis}"
-if len(full_report) <= 4000:
-await message.answer(full_report, reply_markup=main_menu())
-else:
-await message.answer(passport)
-await message.answer(analysis[:4000], reply_markup=main_menu())
-except Exception as e:
-await wait_msg.edit_text(f"⚠️ Сбой нейроядра при анализе ({e}). Попытка не списана, попробуй через минуту.")
+    await state.clear()
+    article = extract_article(message.text)
+    if not article:
+        await message.answer("Не вижу нормального артикула. Пришли цифры (например, 148920312) или ссылку на товар WB.")
+        return
+
+    if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) <= 0:
+        await message.answer(
+            "На балансе 0 сканирований. Пополни энергию серверов, чтобы продолжить разведку:",
+            reply_markup=buy_keyboard(),
+        )
+        return
+
+    wait_msg = await message.answer(f"🛰 Подключаюсь к WB, выгружаю карточку {article} и фильтрую свежий негатив за 90 дней...")
+
+    wb_info = await fetch_wb_data(article)
+    if not wb_info:
+        await wait_msg.edit_text("❌ Не удалось достать карточку с таким артикулом. Проверь цифры и попробуй ещё раз.")
+        return
+
+    passport = (
+        f"📦 ПАСПОРТ ОБЪЕКТА (WB: {wb_info['article']})\n"
+        f"• Товар: {wb_info['name']} ({wb_info['brand']})\n"
+        f"• Цена: {wb_info['price']} ₽ | Рейтинг: {wb_info['rating']}★\n"
+        f"• Всего отзывов в карточке: {wb_info['total_feedbacks']}\n"
+        f"• Взято в разбор (1–3★ за 90 дней): {wb_info['analyzed_count']} шт. "
+        f"(из них 1–2★: {wb_info['neg_1_2']}, 3★: {wb_info['neu_3']})"
+    )
+
+    if wb_info["analyzed_count"] == 0:
+        await wait_msg.edit_text(
+            f"{passport}\n\n"
+            "✅ За последние 90 дней у этого товара вообще нет свежих негативных отзывов (1–3★). "
+            "Либо партия идеальная, либо карточка совсем свежая — разбирать пока нечего, списание не засчитано!"
+        )
+        return
+
+    user_prompt = (
+        f"Данные товара:\n{passport}\n\n"
+        f"Список свежих негативных и нейтральных отзывов (1-3 звезды):\n{wb_info['reviews_text']}"
+    )
+
+    try:
+        response = await ai_client.chat.completions.create(
+            model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.6,
+        )
+        analysis = response.choices[0].message.content
+
+        if message.from_user.id not in ADMIN_IDS:
+            cursor.execute("UPDATE users SET scans_left = scans_left - 1 WHERE user_id = ?", (message.from_user.id,))
+            conn.commit()
+
+        await wait_msg.delete()
+        full_report = f"{passport}\n\n{analysis}"
+
+        if len(full_report) <= 4000:
+            await message.answer(full_report, reply_markup=main_menu())
+        else:
+            await message.answer(passport)
+            await message.answer(analysis[:4000], reply_markup=main_menu())
+
+    except Exception as e:
+        await wait_msg.edit_text(f"⚠️ Сбой нейроядра при анализе ({e}). Попытка не списана, попробуй через минуту.")
+
+
 async def main():
-await dp.start_polling(bot)
-if name == "main":
-asyncio.run(main())
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
