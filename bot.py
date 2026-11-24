@@ -348,16 +348,6 @@ async def successful_payment(message: types.Message):
     )
 
 
-@dp.message(F.text == "🔍 Пробить конкурента по артикулу")
-async def ask_article(message: types.Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) <= 0:
-        await message.answer(
-            "Бесплатный лимит выжат на 100%.\n\n"
-            "Чтобы я не ушёл в спящий режим, закинь пару звёзд на мои серверы — выбирай пакет ниже:",
-            reply_markup=buy_keyboard(),
-        )
-        return
-
     await message.answer("Кидай артикул товара WB (например, 148920312) или прямую ссылку на карточку:")
     await state.set_state(ScanForm.waiting_article)
 
@@ -407,14 +397,17 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
     )
 
     try:
+        user_role = get_user_role(message.from_user.id)
+        active_prompt = BUYER_PROMPT if user_role == "buyer" else SELLER_PROMPT
         response = await ai_client.chat.completions.create(
             model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": active_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.6,
         )
+
         first_choice = next(iter(response.choices))
         analysis = first_choice.message.content
 
