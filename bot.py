@@ -66,19 +66,40 @@ BUYER_PROMPT = (
     "4. ЧТО ПРОВЕРИТЬ НА ПВЗ ПРИ ПОЛУЧЕНИИ (3 коротких совета)."
 )
 
+BATTLE_SELLER_PROMPT = (
+    "Ты — жёсткий и объективный ИИ-аналитик Wildberries. Тебе дали данные и свежие отзывы (1-3★ за 90 дней) по ДВУМ товарам: Товар №1 (наш) и Товар №2 (конкурент). "
+    "Сравни их в лоб. Пиши живым русским языком с эмодзи, без звёздочек (**). Структура: "
+    "1. СЧЁТ ПО ФАКТАМ (кто объективно сильнее по рейтингу, цене и доле свежего негатива). "
+    "2. ПРОБОИНЫ КОНКУРЕНТА (топ-3 слабости Товара №2 из свежих жалоб, на которых можно забрать его клиентов). "
+    "3. НАШИ УЯЗВИМОСТИ (честно: где Товар №1 проигрывает Товару №2 и что срочно чинить). "
+    "4. ПЛАН ПОБЕДЫ (3 конкретных шага по инфографике, цене или доработке товара, чтобы перебить конкурента)."
+)
+
+BATTLE_BUYER_PROMPT = (
+    "Ты — честный ИИ-помощник покупателя на Wildberries. Тебе дали два товара-конкурента (Товар №1 и Товар №2) и их свежие отзывы (1-3★ за 90 дней). "
+    "Помоги выбрать лучший вариант без воды. Пиши просто, с эмодзи, без бизнес-терминов и без звёздочек (**). Структура: "
+    "1. ВЕРДИКТ: КОГО БРАТЬ (Товар №1 или Товар №2, и при каком условии выбрать второй). "
+    "2. МИНУСЫ ТОВАРА №1 (главные свежие жалобы в % и с примерами). "
+    "3. МИНУСЫ ТОВАРА №2 (главные свежие жалобы в % и с примерами). "
+    "4. НА ЧТО СМОТРЕТЬ НА ПВЗ ПРИ ВЫБОРЕ."
+)
+
 
 class ScanForm(StatesGroup):
     waiting_article = State()
+    waiting_battle = State()
+
 
 def main_menu():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🔍 Пробить товар по артикулу")],
+            [KeyboardButton(text="🔍 Пробить товар по артикулу"), KeyboardButton(text="⚔️ Битва артикулов")],
             [KeyboardButton(text="📊 Режим: Селлер"), KeyboardButton(text="🛍 Режим: Покупатель")],
             [KeyboardButton(text="💳 Баланс и пополнение"), KeyboardButton(text="🤖 Хочу такого бота себе")],
         ],
         resize_keyboard=True,
     )
+
 
 def role_keyboard():
     return InlineKeyboardMarkup(
@@ -506,6 +527,98 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
 
     except Exception as e:
         await wait_msg.edit_text(f"⚠️ Сбой нейроядра при анализе ({e}). Попытка не списана, попробуй через минуту.")
+
+@dp.message(F.text == "⚔️ Битва артикулов")
+async def ask_battle_articles(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) < 2:
+        await message.answer(
+            "⚔️ Для «Битвы артикулов» нужно минимум 2 проверки на балансе (по одной на каждый товар).\n"
+            "Пополни баланс ниже:",
+            reply_markup=buy_keyboard(),
+        )
+        return
+    await message.answer(
+        "⚔️ Режим «Битва артикулов» активирован!\n\n"
+        "Пришли ДВА артикула или две ссылки на товары WB через пробел или с новой строки "
+        "(в режиме Селлера первым ставь свой товар, вторым — конкурента):"
+    )
+    await state.set_state(ScanForm.waiting_battle)
+
+
+@dp.message(ScanForm.waiting_battle)
+async def process_battle(message: types.Message, state: FSMContext):
+    found = re.findall(r"(?:catalog/)?(\d{6,12})", message.text or "")
+    articles = list(dict.fromkeys(int(x) for x in found))
+    if len(articles) < 2:
+        await message.answer("Нужно ровно ДВА разных артикула WB (например: `283675449 148920312`). Попробуй ещё раз:")
+        return
+
+    await state.clear()
+    art1, art2 = articles[0], articles[1]
+
+    if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) < 2:
+        await message.answer("Недостаточно проверок на балансе (нужно 2):", reply_markup=buy_keyboard())
+        return
+
+    wait_msg = await message.answer(f"⚔️ Сталкиваю лбами {art1} и {art2}... Выгружаю обе карточки и свежие отзывы за 90 дней...")
+
+    try:
+        wb1, wb2 = await asyncio.gather(fetch_wb_data(art1), fetch_wb_data(art2))
+    except Exception as e:
+        await wait_msg.edit_text(f"⚠️ Ошибка при запросе к WB: {e}")
+        return
+
+    if not wb1 or not wb2:
+        missing = art1 if not wb1 else art2
+        await wait_msg.edit_text(f"❌ Не удалось достать карточку {missing}. Проверь оба артикула и попробуй снова (попытки не списаны).")
+        return
+
+    passport = (
+        f"⚔️ БИТВА АРТИКУЛОВ WB\n\n"
+        f"1️⃣ ТОВАР №1 ({wb1['article']}): {wb1['name']} ({wb1['brand']})\n"
+        f"• Цена: {wb1['price']} | Рейтинг: {wb1['rating']}★ | Жалоб 1–3★ (90 дн.): {wb1['analyzed_count']} из {wb1['total_feedbacks']}\n\n"
+        f"2️⃣ ТОВАР №2 ({wb2['article']}): {wb2['name']} ({wb2['brand']})\n"
+        f"• Цена: {wb2['price']} | Рейтинг: {wb2['rating']}★ | Жалоб 1–3★ (90 дн.): {wb2['analyzed_count']} из {wb2['total_feedbacks']}"
+    )
+
+    user_prompt = (
+        f"{passport}\n\n"
+        f"--- ОТЗЫВЫ ТОВАРА №1 (1-3★) ---\n{wb1['reviews_text'] or 'Свежих жалоб нет'}\n\n"
+        f"--- ОТЗЫВЫ ТОВАРА №2 (1-3★) ---\n{wb2['reviews_text'] or 'Свежих жалоб нет'}"
+    )
+
+    try:
+        user_role = get_user_role(message.from_user.id)
+        active_prompt = BATTLE_BUYER_PROMPT if user_role == "buyer" else BATTLE_SELLER_PROMPT
+        response = await ai_client.chat.completions.create(
+            model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
+            messages=[
+                {"role": "system", "content": active_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.6,
+        )
+
+        analysis = next(iter(response.choices)).message.content
+
+        if message.from_user.id not in ADMIN_IDS:
+            cursor.execute("UPDATE users SET scans_left = scans_left - 2 WHERE user_id = ?", (message.from_user.id,))
+            conn.commit()
+            try:
+                await bot.send_message(1273001338, f"⚔️ Битва WB: {art1} vs {art2} от @{message.from_user.username}")
+            except Exception:
+                pass
+
+        await wait_msg.delete()
+        full_report = f"{passport}\n\n{analysis}"
+        if len(full_report) <= 4000:
+            await message.answer(full_report, reply_markup=main_menu())
+        else:
+            await message.answer(passport)
+            await message.answer(analysis[:4000], reply_markup=main_menu())
+
+    except Exception as e:
+        await wait_msg.edit_text(f"⚠️ Сбой нейроядра при сравнении ({e}). Попытки не списаны.")
 
 @dp.message(F.text == "/stats")
 async def admin_stats(message: types.Message):
