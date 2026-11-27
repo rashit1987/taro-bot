@@ -13,6 +13,8 @@ from aiogram.types import (
     InlineKeyboardButton,
     LabeledPrice,
     PreCheckoutQuery,
+    ReplyKeyboardRemove,
+
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -101,6 +103,7 @@ TOP_BUYER_PROMPT = (
 class ScanForm(StatesGroup):
     waiting_article = State()
     waiting_battle = State()
+    waiting_feedback = State()
 
 
 def seller_menu():
@@ -108,7 +111,7 @@ def seller_menu():
         keyboard=[
             [KeyboardButton(text="🔍 Пробить товар по артикулу"), KeyboardButton(text="⚖️ Сравнить товары (2–5 шт.)")],
             [KeyboardButton(text="💳 Баланс и пополнение"), KeyboardButton(text="🤖 Хочу такого бота себе")],
-            [KeyboardButton(text="🔄 Сменить режим (сейчас: Селлер)")],
+            [KeyboardButton(text="🔄 Сменить режим (сейчас: Селлер)"), KeyboardButton(text="💬 Отзывы и предложения")],
         ],
         resize_keyboard=True,
     )
@@ -119,9 +122,11 @@ def buyer_menu():
         keyboard=[
             [KeyboardButton(text="🔍 Пробить товар по артикулу"), KeyboardButton(text="⚖️ Сравнить товары (2–5 шт.)")],
             [KeyboardButton(text="💳 Баланс и пополнение"), KeyboardButton(text="🔄 Сменить режим (сейчас: Покупатель)")],
+            [KeyboardButton(text="💬 Отзывы и предложения")],
         ],
         resize_keyboard=True,
     )
+
 
 
 def get_menu_for_role(role: str | None):
@@ -408,6 +413,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
         except Exception:
             pass
     scans = get_user_scans(message.from_user.id)
+    temp_msg = await message.answer("⏳", reply_markup=ReplyKeyboardRemove())
+    await temp_msg.delete()
     await message.answer(
         "🤖 На связи ИИ-разведчик Wildberries!\n\n"
         "За 15 секунд анализирую свежие отзывы (1–3★ за 90 дней), реальные цены и скрытые минусы товаров:\n"
@@ -767,6 +774,49 @@ async def cb_retry_battle(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(warned_pair=None)
     await state.set_state(ScanForm.waiting_battle)
     await callback.message.edit_text("🔄 Ок, попытки не списаны! Пришли от 2 до 5 новых артикулов WB через пробел или с новой строки:")
+
+@dp.message(F.text == "💬 Отзывы и предложения")
+async def ask_feedback(message: types.Message, state: FSMContext):
+    await state.set_state(ScanForm.waiting_feedback)
+    cancel_kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_feedback")]]
+    )
+    await message.answer(
+        "💬 Напиши одним сообщением, если нашёл ошибку или хочешь предложить идею для улучшения бота.\n\n"
+        "Я сразу передам это команде 👇",
+        reply_markup=cancel_kb,
+    )
+
+
+@dp.callback_query(F.data == "cancel_feedback")
+async def cb_cancel_feedback(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    await callback.message.edit_text("👌 Отменено. Можешь продолжать работу с артикулами!")
+
+
+@dp.message(ScanForm.waiting_feedback)
+async def process_feedback(message: types.Message, state: FSMContext):
+    await state.clear()
+    role = get_user_role(message.from_user.id)
+    user_text = message.text or message.caption or "[медиафайл без текста]"
+    header = (
+        f"📩 ОТЗЫВ / ИДЕЯ В БОТЕ WB\n"
+        f"От: @{message.from_user.username or 'без_ника'} (ID: {message.from_user.id})\n"
+        f"Роль: {role or 'не выбрана'}\n\n"
+    )
+    try:
+        await bot.send_message(1273001338, header + user_text)
+        for admin_id in ADMIN_IDS:
+            if admin_id != 1273001338:
+                await bot.send_message(admin_id, header + user_text)
+    except Exception:
+        pass
+
+    await message.answer(
+        "✅ Спасибо! Сообщение передано. Если нужно — обязательно добавим это в ближайшем обновлении!",
+        reply_markup=get_menu_for_role(role),
+    )
 
 
 @dp.message(F.text)
