@@ -271,7 +271,7 @@ async def fetch_wb_data(article: int) -> dict | None:
         if len(filtered_reviews) >= 200:
             break
 
-    avg_rating = card_rating if card_rating else (round(sum(all_vals) / len(all_vals), 2) if all_vals else "—")
+        avg_rating = card_rating if card_rating else (round(sum(all_vals) / len(all_vals), 2) if all_vals else "—")
 
     return {
         "article": article,
@@ -284,6 +284,7 @@ async def fetch_wb_data(article: int) -> dict | None:
         "neg_1_2": neg_1_2,
         "neu_3": neu_3,
         "reviews_text": "\n".join(filtered_reviews),
+        "debug": f"root={root_id} | detail_st={st}",
     }
 
 
@@ -449,13 +450,15 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
         f"• Взято в разбор (1–3★ за 90 дней): {wb_info['analyzed_count']} шт. "
         f"(из них 1–2★: {wb_info['neg_1_2']}, 3★: {wb_info['neu_3']})"
 )
-    if wb_info["analyzed_count"] == 0:
+       if wb_info["analyzed_count"] == 0:
         await wait_msg.edit_text(
-            f"{passport}\n\n"
+            f"{passport}\n"
+            f"🛠 Diag: {wb_info.get('debug', '')}\n\n"
             "✅ За последние 90 дней у этого товара вообще нет свежих негативных отзывов (1–3★). "
             "Либо партия идеальная, либо карточка совсем свежая — разбирать пока нечего, списание не засчитано!"
         )
         return
+
 
     user_prompt = (
         f"Данные товара:\n{passport}\n\n"
