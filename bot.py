@@ -228,22 +228,30 @@ async def fetch_wb_data(article: int) -> dict | None:
                         price_str = f"{int(total_kop // 100):,} ₽".replace(",", " ")
                 break
 
-    if name == "Товар WB" or root_id == article:
+    if name == "Товар WB" or root_id == article or price_str == "по карте WB":
         async def check_basket(b: str):
-            url = f"https://basket-{b}.wbbasket.ru/vol{vol}/part{part}/{article}/info/ru/card.json"
-            st_c, data_c = await get_json(url)
+            base_info = f"https://basket-{b}.wbbasket.ru/vol{vol}/part{part}/{article}/info"
+            st_c, data_c = await get_json(f"{base_info}/ru/card.json")
             if st_c == 200 and data_c:
-                return data_c
+                _, hist_data = await get_json(f"{base_info}/price-history.json")
+                return data_c, hist_data
             return None
 
         results = await asyncio.gather(*(check_basket(b) for b in candidate_baskets(vol)))
-        c_data = next((r for r in results if r), None)
-        if c_data:
+        found_pair = next((r for r in results if r), None)
+        if found_pair:
+            c_data, hist_data = found_pair
             name = c_data.get("imt_name", name)
             brand = c_data.get("selling", {}).get("brand_name", brand)
             found_imt = c_data.get("imt_id") or c_data.get("data", {}).get("imt_id")
             if found_imt:
                 root_id = found_imt
+            if price_str == "по карте WB" and isinstance(hist_data, list) and hist_data:
+                last_rec = hist_data[-1]
+                rub_kop = (last_rec.get("price") or {}).get("RUB")
+                if rub_kop:
+                    price_str = f"~{int(rub_kop // 100):,} ₽".replace(",", " ")
+
 
 
     reviews_list = []
