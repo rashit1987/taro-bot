@@ -437,7 +437,7 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
 
     wait_msg = await message.answer(f"🛰 Подключаюсь к WB, выгружаю карточку {article} и фильтрую свежий негатив за 90 дней...")
 
-        try:
+    try:
         wb_info = await fetch_wb_data(article)
     except Exception as e:
         await wait_msg.edit_text(f"⚠️ Ошибка при запросе к WB: {e}")
