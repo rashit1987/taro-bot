@@ -141,7 +141,12 @@ def candidate_baskets(vol: int) -> list[str]:
 
 
 async def fetch_wb_data(article: int) -> dict | None:
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Origin": "https://wildberries.ru",
+        "Referer": f"https://wildberries.ru/catalog/{article}/detail.aspx",
+    }
     timeout = aiohttp.ClientTimeout(total=15)
     vol = article // 100000
     part = article // 1000
@@ -150,33 +155,65 @@ async def fetch_wb_data(article: int) -> dict | None:
         name = "Товар WB"
         brand = "Бренд WB"
         root_id = article
+        price_str = "по карте WB"
+        card_rating = None
 
-        for basket in candidate_baskets(vol):
-            card_cdn = f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{article}/info/ru/card.json"
-            try:
-                async with session.get(card_cdn) as resp:
-                    if resp.status == 200:
-                        c_data = await resp.json(content_type=None)
-                        name = c_data.get("imt_name", name)
-                        brand = c_data.get("selling", {}).get("brand_name", brand)
-                        root_id = c_data.get("imt_id", article)
-                        break
-            except Exception:
-                continue
+        detail_url = f"https://wb.ru{article}"
+        try:
+            async with session.get(detail_url) as d_resp:
+                if d_resp.status == 200:
+                    d_json = await d_resp.json(content_type=None)
+                    products = d_json.get("data", {}).get("products") or []
+                    if products:
+                        prod = next(iter(products))
+                        name = prod.get("name") or name
+                        brand = prod.get("brand") or brand
+                        root_id = prod.get("root") or root_id
+                        card_rating = prod.get("reviewRating") or prod.get("rating")
+                        sizes = prod.get("sizes") or []
+                        if sizes:
+                            first_size = next(iter(sizes))
+                            p_info = first_size.get("price") or {}
+                            total_kop = p_info.get("product") or p_info.get("basic")
+                            if total_kop:
+                                price_str = f"{int(total_kop // 100):,} ₽".replace(",", " ")
+        except Exception:
+            pass
+
+        if name == "Товар WB" or root_id == article:
+            for basket in candidate_baskets(vol):
+                card_cdn = f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{article}/info/ru/card.json"
+                try:
+                    async with session.get(card_cdn) as resp:
+                        if resp.status == 200:
+                            c_data = await resp.json(content_type=None)
+                            name = c_data.get("imt_name", name)
+                            brand = c_data.get("selling", {}).get("brand_name", brand)
+                            root_id = c_data.get("imt_id", root_id)
+                            break
+                except Exception:
+                    continue
 
         reviews_list = []
-        for sub in ("feedbacks1.", "feedbacks2."):
-            fb_url = "https://" + sub + "wb.ru" + "/feedbacks/v1/" + str(root_id)
-            try:
-                async with session.get(fb_url) as fb_resp:
-                    if fb_resp.status == 200:
-                        fb_json = await fb_resp.json(content_type=None)
-                        raw_fbs = fb_json.get("feedbacks") or []
-                        if raw_fbs:
-                            reviews_list = raw_fbs
-                            break
-            except Exception:
-                continue
+        candidate_ids = list(dict.fromkeys([root_id, article]))
+        for cid in candidate_ids:
+            for ver in ("v2", "v1"):
+                for sub in ("feedbacks1.", "feedbacks2."):
+                    fb_url = f"https://{sub}wb.ru/feedbacks/{ver}/{cid}"
+                    try:
+                        async with session.get(fb_url) as fb_resp:
+                            if fb_resp.status == 200:
+                                fb_json = await fb_resp.json(content_type=None)
+                                raw_fbs = fb_json.get("feedbacks") or []
+                                if raw_fbs:
+                                    reviews_list = raw_fbs
+                                    break
+                    except Exception:
+                        continue
+                if reviews_list:
+                    break
+            if reviews_list:
+                break
 
         if not reviews_list and name == "Товар WB":
             return None
@@ -221,13 +258,13 @@ async def fetch_wb_data(article: int) -> dict | None:
             if len(filtered_reviews) >= 200:
                 break
 
-        avg_rating = round(sum(all_vals) / len(all_vals), 2) if all_vals else "—"
+        avg_rating = card_rating if card_rating else (round(sum(all_vals) / len(all_vals), 2) if all_vals else "—")
 
         return {
             "article": article,
             "name": name,
             "brand": brand,
-            "price": "по карте WB",
+            "price": price_str,
             "rating": avg_rating,
             "total_feedbacks": len(reviews_list),
             "analyzed_count": len(filtered_reviews),
@@ -235,7 +272,6 @@ async def fetch_wb_data(article: int) -> dict | None:
             "neu_3": neu_3,
             "reviews_text": "\n".join(filtered_reviews),
         }
-
 
 
 def get_user_scans(user_id: int) -> int:
@@ -352,7 +388,7 @@ async def pre_checkout(pre_checkout_q: PreCheckoutQuery):
 
 
 @dp.message(F.successful_payment)
-async def successful_payment(message: types.Message):
+async def successful_payment(message: types.Message, state: FSMContext):
     payload = message.successful_payment.invoice_payload
     add_map = {"pack_1": 1, "pack_10": 10, "pack_30": 30}
     added = add_map.get(payload, 0)
@@ -365,9 +401,6 @@ async def successful_payment(message: types.Message):
         f"⚡ Энергия на серверы поступила! Начислено разборов: +{added}.\n"
         f"Текущий баланс: {new_bal}. Кидай артикул или ссылку на WB!"
     )
-
-
-    await message.answer("Кидай артикул товара WB (например, 148920312) или прямую ссылку на карточку:")
     await state.set_state(ScanForm.waiting_article)
 
 
