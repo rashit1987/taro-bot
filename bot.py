@@ -148,7 +148,7 @@ def buy_keyboard():
             [InlineKeyboardButton(text="⚡ 1 разбор — 20 ⭐", callback_data="buy_1")],
             [InlineKeyboardButton(text="🔥 10 разборов — 150 ⭐", callback_data="buy_10")],
             [InlineKeyboardButton(text="🚀 30 разборов — 350 ⭐", callback_data="buy_30")],
-            [InlineKeyboardButton(text="💳 Оплатить картой РФ / СБП (написать ассистенту)", callback_data="contact_human")],
+            [InlineKeyboardButton(text="💳 Оплатить картой РФ / СБП (скоро)", callback_data="contact_human")],
         ]
     )
 
@@ -230,26 +230,35 @@ async def fetch_wb_data(article: int) -> dict | None:
     part = article // 1000
 
     async def get_json(url: str) -> tuple[int, dict | None]:
-        try:
-            from curl_cffi.requests import AsyncSession
-            async with AsyncSession(impersonate="chrome", timeout=15) as s:
-                r = await s.get(url, headers=headers)
-                if r.status_code == 200:
-                    return r.status_code, r.json()
-                return r.status_code, None
-        except ImportError:
-            pass
-        except Exception:
-            return 0, None
+        for attempt in range(2):
+            try:
+                from curl_cffi.requests import AsyncSession
+                async with AsyncSession(impersonate="chrome", timeout=15) as s:
+                    r = await s.get(url, headers=headers)
+                    if r.status_code == 429 and attempt == 0:
+                        await asyncio.sleep(0.4)
+                        continue
+                    if r.status_code == 200:
+                        return r.status_code, r.json()
+                    return r.status_code, None
+            except ImportError:
+                pass
+            except Exception:
+                return 0, None
 
-        try:
-            async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as session:
-                async with session.get(url) as resp:
-                    if resp.status == 200:
-                        return resp.status, await resp.json(content_type=None)
-                    return resp.status, None
-        except Exception:
-            return 0, None
+            try:
+                async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as session:
+                    async with session.get(url) as resp:
+                        if resp.status == 429 and attempt == 0:
+                            await asyncio.sleep(0.4)
+                            continue
+                        if resp.status == 200:
+                            return resp.status, await resp.json(content_type=None)
+                        return resp.status, None
+            except Exception:
+                return 0, None
+        return 0, None
+
 
     name = "Товар WB"
     brand = "Бренд WB"
@@ -298,10 +307,22 @@ async def fetch_wb_data(article: int) -> dict | None:
             found_imt = c_data.get("imt_id") or c_data.get("data", {}).get("imt_id")
             if found_imt:
                 root_id = found_imt
+                        if price_str == "по карте WB":
+                search_url = f"https://wb.ru{article}"
+                st_s, data_s = await get_json(search_url)
+                if st_s == 200 and data_s:
+                    s_prods = data_s.get("data", {}).get("products") or []
+                    matched = next((p for p in s_prods if p.get("id") == article), None)
+                    if matched:
+                        for sz in matched.get("sizes", []):
+                            pr = (sz.get("price") or {}).get("product") or (sz.get("price") or {}).get("basic")
+                            if pr:
+                                price_str = f"~{int(pr // 100):,} ₽".replace(",", " ")
+                                break
             if price_str == "по карте WB" and isinstance(hist_data, list) and hist_data:
                 last_rec = hist_data[-1]
                 rub_kop = (last_rec.get("price") or {}).get("RUB")
-                if rub_kop:
+                if rub_kop and rub_kop >= 10000:
                     price_str = f"~{int(rub_kop // 100):,} ₽".replace(",", " ")
 
 
@@ -505,8 +526,8 @@ async def want_own_bot(message: types.Message):
 async def cb_contact_human(callback: types.CallbackQuery):
     await callback.answer()
     await callback.message.answer(
-        f"С рублями и индивидуальными тарифами разбирается мой кожаный ассистент: {ASSISTANT_USERNAME}\n"
-        "Напиши ему напрямую — он подключит нужный пакет по карте РФ или обсудит внедрение бота под ключ."
+        "💳 Автоматическая оплата картой РФ и через СБП (ЮKassa) сейчас на финальном подключении!\n\n"
+        "А пока пополнить баланс за 5 секунд можно через Telegram Stars кнопками выше 👆"
     )
 
 
@@ -805,13 +826,11 @@ async def process_feedback(message: types.Message, state: FSMContext):
         f"От: @{message.from_user.username or 'без_ника'} (ID: {message.from_user.id})\n"
         f"Роль: {role or 'не выбрана'}\n\n"
     )
-    try:
-        await bot.send_message(1273001338, header + user_text)
-        for admin_id in ADMIN_IDS:
-            if admin_id != 1273001338:
-                await bot.send_message(admin_id, header + user_text)
-    except Exception:
-        pass
+    for recipient_id in set((1273001338, *ADMIN_IDS)):
+        try:
+            await bot.send_message(recipient_id, header + user_text)
+        except Exception:
+            pass
 
     await message.answer(
         "✅ Спасибо! Сообщение передано. Если нужно — обязательно добавим это в ближайшем обновлении!",
