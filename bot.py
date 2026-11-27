@@ -307,24 +307,25 @@ async def fetch_wb_data(article: int) -> dict | None:
             found_imt = c_data.get("imt_id") or c_data.get("data", {}).get("imt_id")
             if found_imt:
                 root_id = found_imt
-            if price_str == "по карте WB":
+        if price_str == "по карте WB":
             host = "search" + ".wb.ru"
             search_url = f"https://{host}/exactmatch/ru/common/v9/search?appType=1&curr=rub&dest=-1257786&query={article}"
-                st_s, data_s = await get_json(search_url)
-                if st_s == 200 and data_s:
-                    s_prods = data_s.get("data", {}).get("products") or []
-                    matched = next((p for p in s_prods if p.get("id") == article), None)
-                    if matched:
-                        for sz in matched.get("sizes", []):
-                            pr = (sz.get("price") or {}).get("product") or (sz.get("price") or {}).get("basic")
-                            if pr:
-                                price_str = f"~{int(pr // 100):,} ₽".replace(",", " ")
-                                break
-            if price_str == "по карте WB" and isinstance(hist_data, list) and hist_data:
-                last_rec = hist_data[-1]
-                rub_kop = (last_rec.get("price") or {}).get("RUB")
-                if rub_kop and rub_kop >= 10000:
-                    price_str = f"~{int(rub_kop // 100):,} ₽".replace(",", " ")
+            st_s, data_s = await get_json(search_url)
+            if st_s == 200 and data_s:
+                s_prods = data_s.get("data", {}).get("products") or []
+                matched = next((p for p in s_prods if p.get("id") == article), None)
+                if matched:
+                    for sz in matched.get("sizes", []):
+                        pr = (sz.get("price") or {}).get("product") or (sz.get("price") or {}).get("basic")
+                        if pr:
+                            price_str = f"~{int(pr // 100):,} ₽".replace(",", " ")
+                            break
+        if price_str == "по карте WB" and isinstance(hist_data, list) and hist_data:
+            last_rec = hist_data[-1]
+            rub_kop = (last_rec.get("price") or {}).get("RUB")
+            if rub_kop and rub_kop >= 10000:
+                price_str = f"~{int(rub_kop // 100):,} ₽".replace(",", " ")
+
 
 
 
