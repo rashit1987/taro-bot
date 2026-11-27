@@ -660,7 +660,7 @@ async def run_battle_analysis(message: types.Message, user_id: int, username: st
 
 
 @dp.message(ScanForm.waiting_battle)
-@dp.message(StateFilter(None), F.text.regexp(r"(?:catalog/)?(?:\d[ \t]*){6,12}[\s,;]+(?:catalog/)?(?:\d[ \t]*){6,12}"))
+@dp.message(StateFilter(None), F.text.regexp(r"(?:catalog/)?(?:\d[ \t]*){6,12}\D+(?:catalog/)?(?:\d[ \t]*){6,12}"))
 async def process_battle(message: types.Message, state: FSMContext):
     cleaned_battle = re.sub(r"(?<=\d)[ \t]+(?=\d)", "", message.text or "")
     found = re.findall(r"(?:catalog/)?(\d{6,12})", cleaned_battle)
