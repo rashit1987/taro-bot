@@ -215,7 +215,7 @@ async def fetch_wb_data(article: int) -> dict | None:
     candidate_ids = list(dict.fromkeys([root_id, article]))
     for cid in candidate_ids:
         for ver in ("v2", "v1"):
-            for sub in ("feedbacks1.", "feedbacks2."):
+                for sub in ("feedbacks1.", "feedbacks2.", "feedbacks3.", "feedbacks4.", "feedbacks5.", "feedbacks."):
                 fb_url = f"https://{sub}wb.ru/feedbacks/{ver}/{cid}"
                 st, fb_json = await get_json(fb_url)
                 if st == 200 and fb_json:
@@ -460,7 +460,6 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
     if wb_info["analyzed_count"] == 0:
         await wait_msg.edit_text(
             f"{passport}\n"
-            f"🛠 Debug: {wb_info.get('debug', 'нет')}\n\n"
             "✅ За последние 90 дней у этого товара вообще нет свежих негативных отзывов (1–3★). "
             "Либо партия идеальная, либо карточка совсем свежая — разбирать пока нечего, списание не засчитано!"
         )
