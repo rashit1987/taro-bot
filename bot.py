@@ -118,6 +118,13 @@ def buy_keyboard():
         ]
     )
 
+def confirm_battle_keyboard(art1: int, art2: int):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⚔️ Всё равно сравнить", callback_data=f"force_battle_{art1}_{art2}")],
+            [InlineKeyboardButton(text="🔄 Ввести другие артикулы", callback_data="retry_battle")],
+        ]
+    )
 
 def extract_article(text: str) -> int | None:
     if not text:
@@ -208,6 +215,7 @@ async def fetch_wb_data(article: int) -> dict | None:
     root_id = article
     price_str = "по карте WB"
     card_rating = None
+    category = ""
 
     for api_ver in ("v4", "v2"):
         detail_url = f"https://wb.ru{api_ver}/detail?appType=1&curr=rub&dest=-1255987&spp=30&ab_testing=false&nm={article}"
@@ -220,6 +228,7 @@ async def fetch_wb_data(article: int) -> dict | None:
                 brand = prod.get("brand") or brand
                 root_id = prod.get("root") or prod.get("imt_id") or root_id
                 card_rating = prod.get("reviewRating") or prod.get("rating")
+                category = prod.get("entity") or category
                 sizes = prod.get("sizes") or []
                 if sizes:
                     first_size = next(iter(sizes))
@@ -244,6 +253,7 @@ async def fetch_wb_data(article: int) -> dict | None:
             c_data, hist_data = found_pair
             name = c_data.get("imt_name", name)
             brand = c_data.get("selling", {}).get("brand_name", brand)
+            category = c_data.get("subj_name") or category
             found_imt = c_data.get("imt_id") or c_data.get("data", {}).get("imt_id")
             if found_imt:
                 root_id = found_imt
@@ -322,6 +332,7 @@ async def fetch_wb_data(article: int) -> dict | None:
         "article": article,
         "name": name,
         "brand": brand,
+        "category": category.strip().lower(),
         "price": price_str,
         "rating": avg_rating,
         "total_feedbacks": len(reviews_list),
@@ -568,20 +579,8 @@ async def ask_battle_articles(message: types.Message, state: FSMContext):
     await state.set_state(ScanForm.waiting_battle)
 
 
-@dp.message(ScanForm.waiting_battle)
-@dp.message(StateFilter(None), F.text.regexp(r"(?:catalog/)?(?:\d[ \t]*){6,12}[\s,;]+(?:catalog/)?(?:\d[ \t]*){6,12}"))
-async def process_battle(message: types.Message, state: FSMContext):
-    cleaned_battle = re.sub(r"(?<=\d)[ \t]+(?=\d)", "", message.text or "")
-    found = re.findall(r"(?:catalog/)?(\d{6,12})", cleaned_battle)
-    articles = list(dict.fromkeys(int(x) for x in found))
-    if len(articles) < 2:
-        await message.answer("Нужно ровно ДВА разных артикула WB (например: 283675449 148920312). Попробуй ещё раз:")
-        return
-
-    await state.clear()
-    art1, art2 = articles[0], articles[1]
-
-    if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) < 2:
+async def run_battle_analysis(message: types.Message, user_id: int, username: str | None, art1: int, art2: int, skip_cat_check: bool = False, state: FSMContext | None = None):
+    if user_id not in ADMIN_IDS and get_user_scans(user_id) < 2:
         await message.answer("Недостаточно проверок на балансе (нужно 2):", reply_markup=buy_keyboard())
         return
 
@@ -596,6 +595,20 @@ async def process_battle(message: types.Message, state: FSMContext):
     if not wb1 or not wb2:
         missing = art1 if not wb1 else art2
         await wait_msg.edit_text(f"❌ Не удалось достать карточку {missing}. Проверь оба артикула и попробуй снова (попытки не списаны).")
+        return
+
+    cat1, cat2 = wb1.get("category", ""), wb2.get("category", "")
+    if not skip_cat_check and cat1 and cat2 and cat1 != cat2:
+        if state:
+            await state.update_data(warned_pair=sorted([art1, art2]))
+            await state.set_state(ScanForm.waiting_battle)
+        await wait_msg.edit_text(
+            f"⚠️ Похоже, товары из разных категорий:\n"
+            f"1️⃣ {wb1['name']} — категория «{cat1}»\n"
+            f"2️⃣ {wb2['name']} — категория «{cat2}»\n\n"
+            f"Сравниваем их в лоб (спишется 2 проверки) или заменишь артикул?",
+            reply_markup=confirm_battle_keyboard(art1, art2),
+        )
         return
 
     passport = (
@@ -613,7 +626,7 @@ async def process_battle(message: types.Message, state: FSMContext):
     )
 
     try:
-        user_role = get_user_role(message.from_user.id)
+        user_role = get_user_role(user_id)
         active_prompt = BATTLE_BUYER_PROMPT if user_role == "buyer" else BATTLE_SELLER_PROMPT
         response = await ai_client.chat.completions.create(
             model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
@@ -626,11 +639,11 @@ async def process_battle(message: types.Message, state: FSMContext):
 
         analysis = next(iter(response.choices)).message.content
 
-        if message.from_user.id not in ADMIN_IDS:
-            cursor.execute("UPDATE users SET scans_left = scans_left - 2 WHERE user_id = ?", (message.from_user.id,))
+        if user_id not in ADMIN_IDS:
+            cursor.execute("UPDATE users SET scans_left = scans_left - 2 WHERE user_id = ?", (user_id,))
             conn.commit()
             try:
-                await bot.send_message(1273001338, f"⚔️ Битва WB: {art1} vs {art2} от @{message.from_user.username}")
+                await bot.send_message(1273001338, f"⚔️ Битва WB: {art1} vs {art2} от @{username}")
             except Exception:
                 pass
 
@@ -644,6 +657,59 @@ async def process_battle(message: types.Message, state: FSMContext):
 
     except Exception as e:
         await wait_msg.edit_text(f"⚠️ Сбой нейроядра при сравнении ({e}). Попытки не списаны.")
+
+
+@dp.message(ScanForm.waiting_battle)
+@dp.message(StateFilter(None), F.text.regexp(r"(?:catalog/)?(?:\d[ \t]*){6,12}[\s,;]+(?:catalog/)?(?:\d[ \t]*){6,12}"))
+async def process_battle(message: types.Message, state: FSMContext):
+    cleaned_battle = re.sub(r"(?<=\d)[ \t]+(?=\d)", "", message.text or "")
+    found = re.findall(r"(?:catalog/)?(\d{6,12})", cleaned_battle)
+    articles = list(dict.fromkeys(int(x) for x in found))
+    if len(articles) < 2:
+        await message.answer("Нужно ровно ДВА разных артикула WB (например: 283675449 148920312). Попробуй ещё раз:")
+        return
+
+    art1, art2 = articles[0], articles[1]
+    data = await state.get_data()
+    already_warned = data.get("warned_pair") == sorted([art1, art2])
+    await state.clear()
+
+    await run_battle_analysis(
+        message=message,
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        art1=art1,
+        art2=art2,
+        skip_cat_check=already_warned,
+        state=state,
+    )
+
+
+@dp.callback_query(F.data.startswith("force_battle_"))
+async def cb_force_battle(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    parts = callback.data.split("_")
+    art1, art2 = int(parts[2]), int(parts[3])
+    await callback.message.delete()
+    await run_battle_analysis(
+        message=callback.message,
+        user_id=callback.from_user.id,
+        username=callback.from_user.username,
+        art1=art1,
+        art2=art2,
+        skip_cat_check=True,
+        state=state,
+    )
+
+
+@dp.callback_query(F.data == "retry_battle")
+async def cb_retry_battle(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.update_data(warned_pair=None)
+    await state.set_state(ScanForm.waiting_battle)
+    await callback.message.edit_text("🔄 Ок, попытки не списаны! Пришли два новых артикула WB через пробел или с новой строки:")
+
 
 @dp.message(F.text == "/stats")
 async def admin_stats(message: types.Message):
