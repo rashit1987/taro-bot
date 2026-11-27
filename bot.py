@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone, timedelta
 import aiohttp
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
@@ -465,7 +465,7 @@ async def successful_payment(message: types.Message, state: FSMContext):
 
 
 @dp.message(ScanForm.waiting_article)
-@dp.message(F.text.regexp(r"(wildberries\.ru/catalog/\d+|(?:\d\s*){6,12})"))
+@dp.message(StateFilter(None), F.text.regexp(r"(wildberries\.ru/catalog/\d+|^\s*(?:\d[ \t]*){6,12}\s*$)"))
 async def analyze_competitor(message: types.Message, state: FSMContext):
     await state.clear()
     article = extract_article(message.text)
