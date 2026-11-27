@@ -459,11 +459,13 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
 
     if wb_info["analyzed_count"] == 0:
         await wait_msg.edit_text(
-            f"{passport}\n\n"
+            f"{passport}\n"
+            f"🛠 Debug: {wb_info.get('debug', 'нет')}\n\n"
             "✅ За последние 90 дней у этого товара вообще нет свежих негативных отзывов (1–3★). "
             "Либо партия идеальная, либо карточка совсем свежая — разбирать пока нечего, списание не засчитано!"
         )
         return
+
 
     user_prompt = (
         f"Данные товара:\n{passport}\n\n"
