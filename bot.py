@@ -143,138 +143,149 @@ def candidate_baskets(vol: int) -> list[str]:
 async def fetch_wb_data(article: int) -> dict | None:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
+        "Accept": "*/*",
         "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Origin": "https://www.wildberries.ru",
-        "Referer": f"https://wildberries.ru{article}/detail.aspx",
+        "Origin": "https://wildberries.ru",
+        "Referer": f"https://wildberries.ru/catalog/{article}/detail.aspx",
     }
-    timeout = aiohttp.ClientTimeout(total=15)
     vol = article // 100000
     part = article // 1000
 
-    async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
-        name = "Товар WB"
-        brand = "Бренд WB"
-        root_id = article
-        price_str = "по карте WB"
-        card_rating = None
-
-        detail_url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1255987&spp=30&ab_testing=false&nm={article}"
+    async def get_json(url: str) -> tuple[int, dict | None]:
         try:
-            async with session.get(detail_url) as d_resp:
-                if d_resp.status == 200:
-                    d_json = await d_resp.json(content_type=None)
-                    products = d_json.get("data", {}).get("products") or d_json.get("products") or []
-                    if products:
-                        prod = next(iter(products))
-                        name = prod.get("name") or name
-                        brand = prod.get("brand") or brand
-                        root_id = prod.get("root") or prod.get("imt_id") or root_id
-                        card_rating = prod.get("reviewRating") or prod.get("rating")
-                        sizes = prod.get("sizes") or []
-                        if sizes:
-                            first_size = next(iter(sizes))
-                            p_info = first_size.get("price") or {}
-                            total_kop = p_info.get("product") or p_info.get("basic")
-                            if total_kop:
-                                price_str = f"{int(total_kop // 100):,} ₽".replace(",", " ")
+            from curl_cffi.requests import AsyncSession
+            async with AsyncSession(impersonate="chrome", timeout=15) as s:
+                r = await s.get(url, headers=headers)
+                if r.status_code == 200:
+                    return r.status_code, r.json()
+                return r.status_code, None
+        except ImportError:
+            pass
+        except Exception:
+            return 0, None
+
+        try:
+            async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        return resp.status, await resp.json(content_type=None)
+                    return resp.status, None
+        except Exception:
+            return 0, None
+
+    name = "Товар WB"
+    brand = "Бренд WB"
+    root_id = article
+    price_str = "по карте WB"
+    card_rating = None
+
+    for api_ver in ("v4", "v2"):
+        detail_url = f"https://wb.ru{api_ver}/detail?appType=1&curr=rub&dest=-1255987&spp=30&ab_testing=false&nm={article}"
+        st, d_json = await get_json(detail_url)
+        if st == 200 and d_json:
+            products = d_json.get("data", {}).get("products") or d_json.get("products") or []
+            if products:
+                prod = next(iter(products))
+                name = prod.get("name") or name
+                brand = prod.get("brand") or brand
+                root_id = prod.get("root") or prod.get("imt_id") or root_id
+                card_rating = prod.get("reviewRating") or prod.get("rating")
+                sizes = prod.get("sizes") or []
+                if sizes:
+                    first_size = next(iter(sizes))
+                    p_info = first_size.get("price") or {}
+                    total_kop = p_info.get("product") or p_info.get("basic")
+                    if total_kop:
+                        price_str = f"{int(total_kop // 100):,} ₽".replace(",", " ")
+                break
+
+    if name == "Товар WB" or root_id == article:
+        for basket in candidate_baskets(vol):
+            card_cdn = f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{article}/info/ru/card.json"
+            st, c_data = await get_json(card_cdn)
+            if st == 200 and c_data:
+                name = c_data.get("imt_name", name)
+                brand = c_data.get("selling", {}).get("brand_name", brand)
+                found_imt = c_data.get("imt_id") or c_data.get("data", {}).get("imt_id")
+                if found_imt:
+                    root_id = found_imt
+                break
+
+    reviews_list = []
+    candidate_ids = list(dict.fromkeys([root_id, article]))
+    for cid in candidate_ids:
+        for ver in ("v2", "v1"):
+            for sub in ("feedbacks1.", "feedbacks2."):
+                fb_url = f"https://{sub}wb.ru/feedbacks/{ver}/{cid}"
+                st, fb_json = await get_json(fb_url)
+                if st == 200 and fb_json:
+                    raw_fbs = fb_json.get("feedbacks") or []
+                    if raw_fbs:
+                        reviews_list = raw_fbs
+                        break
+            if reviews_list:
+                break
+        if reviews_list:
+            break
+
+    if not reviews_list and name == "Товар WB":
+        return None
+
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=90)
+    filtered_reviews = []
+    neg_1_2 = 0
+    neu_3 = 0
+    all_vals = []
+
+    for fb in reviews_list:
+        val = fb.get("productValuation", 5)
+        all_vals.append(val)
+        if val > 3:
+            continue
+        created_str = fb.get("createdDate", "")
+        try:
+            fb_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+            if fb_dt < cutoff_date:
+                continue
         except Exception:
             pass
 
-        if name == "Товар WB" or root_id == article:
-            for basket in candidate_baskets(vol):
-                card_cdn = f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{article}/info/ru/card.json"
-                try:
-                    async with session.get(card_cdn) as resp:
-                        if resp.status == 200:
-                            c_data = await resp.json(content_type=None)
-                            name = c_data.get("imt_name", name)
-                            brand = c_data.get("selling", {}).get("brand_name", brand)
-                            found_imt = c_data.get("imt_id") or c_data.get("data", {}).get("imt_id")
-                            if found_imt:
-                                root_id = found_imt
-                            break
-                except Exception:
-                    continue
+        text_parts = []
+        if fb.get("text"):
+            text_parts.append(fb["text"].strip())
+        if fb.get("pros"):
+            text_parts.append(f"Плюсы: {fb['pros'].strip()}")
+        if fb.get("cons"):
+            text_parts.append(f"Минусы: {fb['cons'].strip()}")
 
-        reviews_list = []
-        candidate_ids = list(dict.fromkeys([root_id, article]))
-        for cid in candidate_ids:
-            for ver in ("v2", "v1"):
-                for sub in ("feedbacks1.", "feedbacks2."):
-                    fb_url = f"https://{sub}wb.ru/feedbacks/{ver}/{cid}"
-                    try:
-                        async with session.get(fb_url) as fb_resp:
-                            if fb_resp.status == 200:
-                                fb_json = await fb_resp.json(content_type=None)
-                                raw_fbs = fb_json.get("feedbacks") or []
-                                if raw_fbs:
-                                    reviews_list = raw_fbs
-                                    break
-                    except Exception:
-                        continue
-                if reviews_list:
-                    break
-            if reviews_list:
-                break
+        full_comment = " | ".join(text_parts)
+        if not full_comment:
+            continue
 
-        if not reviews_list and name == "Товар WB":
-            return None
+        if val <= 2:
+            neg_1_2 += 1
+        else:
+            neu_3 += 1
 
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=90)
-        filtered_reviews = []
-        neg_1_2 = 0
-        neu_3 = 0
-        all_vals = []
+        filtered_reviews.append(f"[{val}★] {full_comment[:350]}")
+        if len(filtered_reviews) >= 200:
+            break
 
-        for fb in reviews_list:
-            val = fb.get("productValuation", 5)
-            all_vals.append(val)
-            if val > 3:
-                continue
-            created_str = fb.get("createdDate", "")
-            try:
-                fb_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
-                if fb_dt < cutoff_date:
-                    continue
-            except Exception:
-                pass
+    avg_rating = card_rating if card_rating else (round(sum(all_vals) / len(all_vals), 2) if all_vals else "—")
 
-            text_parts = []
-            if fb.get("text"):
-                text_parts.append(fb["text"].strip())
-            if fb.get("pros"):
-                text_parts.append(f"Плюсы: {fb['pros'].strip()}")
-            if fb.get("cons"):
-                text_parts.append(f"Минусы: {fb['cons'].strip()}")
+    return {
+        "article": article,
+        "name": name,
+        "brand": brand,
+        "price": price_str,
+        "rating": avg_rating,
+        "total_feedbacks": len(reviews_list),
+        "analyzed_count": len(filtered_reviews),
+        "neg_1_2": neg_1_2,
+        "neu_3": neu_3,
+        "reviews_text": "\n".join(filtered_reviews),
+    }
 
-            full_comment = " | ".join(text_parts)
-            if not full_comment:
-                continue
-
-            if val <= 2:
-                neg_1_2 += 1
-            else:
-                neu_3 += 1
-
-            filtered_reviews.append(f"[{val}★] {full_comment[:350]}")
-            if len(filtered_reviews) >= 200:
-                break
-
-        avg_rating = card_rating if card_rating else (round(sum(all_vals) / len(all_vals), 2) if all_vals else "—")
-
-        return {
-            "article": article,
-            "name": name,
-            "brand": brand,
-            "price": price_str,
-            "rating": avg_rating,
-            "total_feedbacks": len(reviews_list),
-            "analyzed_count": len(filtered_reviews),
-            "neg_1_2": neg_1_2,
-            "neu_3": neu_3,
-            "reviews_text": "\n".join(filtered_reviews),
-        }
 
 
 def get_user_scans(user_id: int) -> int:
