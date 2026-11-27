@@ -785,22 +785,6 @@ async def smart_articles_router(message: types.Message, state: FSMContext):
 
     if not articles:
         if current_state == ScanForm.waiting_battle:
-@dp.message(F.text)
-async def smart_articles_router(message: types.Message, state: FSMContext):
-    current_state = await state.get_state()
-    role = get_user_role(message.from_user.id)
-
-    if not role:
-        await message.answer(
-            "Сначала выбери свою роль, чтобы я открыл нужный кабинет и настроил формат отчётов 👇",
-            reply_markup=role_keyboard(),
-        )
-        return
-
-    articles = extract_all_articles(message.text)
-
-    if not articles:
-        if current_state == ScanForm.waiting_battle:
             await message.answer("Нужно минимум ДВА разных артикула WB (от 2 до 5 шт.) через пробел или с новой строки. Попробуй ещё раз:")
         elif current_state == ScanForm.waiting_article:
             await message.answer("Не вижу нормального артикула. Пришли цифры (например, 283675449) или ссылку на товар WB:")
