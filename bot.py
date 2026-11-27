@@ -307,8 +307,9 @@ async def fetch_wb_data(article: int) -> dict | None:
             found_imt = c_data.get("imt_id") or c_data.get("data", {}).get("imt_id")
             if found_imt:
                 root_id = found_imt
-                        if price_str == "по карте WB":
-                search_url = f"https://wb.ru{article}"
+            if price_str == "по карте WB":
+            host = "search" + ".wb.ru"
+            search_url = f"https://{host}/exactmatch/ru/common/v9/search?appType=1&curr=rub&dest=-1257786&query={article}"
                 st_s, data_s = await get_json(search_url)
                 if st_s == 200 and data_s:
                     s_prods = data_s.get("data", {}).get("products") or []
