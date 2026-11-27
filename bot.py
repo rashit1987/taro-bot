@@ -150,13 +150,20 @@ def candidate_baskets(vol: int) -> list[str]:
     elif vol <= 2621: guess = 16
     elif vol <= 2837: guess = 17
     elif vol <= 3053: guess = 18
+    elif vol <= 3269: guess = 19
+    elif vol <= 3485: guess = 20
+    elif vol <= 3701: guess = 21
+    elif vol <= 3917: guess = 22
+    elif vol <= 4133: guess = 23
+    elif vol <= 4349: guess = 24
+    elif vol <= 4565: guess = 25
     else:
-        guess = 19 + (vol - 3054) // 216
+        guess = 26 + (vol - 4566) // 1200
 
     nums = []
-    for delta in (0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5):
+    for delta in range(-6, 7):
         b = guess + delta
-        if b >= 1:
+        if 1 <= b <= 45:
             nums.append(f"{b:02d}")
     return nums
 
