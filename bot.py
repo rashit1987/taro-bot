@@ -215,7 +215,7 @@ async def fetch_wb_data(article: int) -> dict | None:
     candidate_ids = list(dict.fromkeys([root_id, article]))
     for cid in candidate_ids:
         for ver in ("v2", "v1"):
-                for sub in ("feedbacks1.", "feedbacks2.", "feedbacks3.", "feedbacks4.", "feedbacks5.", "feedbacks."):
+            for sub in ("feedbacks1.", "feedbacks2.", "feedbacks3.", "feedbacks4.", "feedbacks5.", "feedbacks."):
                 fb_url = f"https://{sub}wb.ru/feedbacks/{ver}/{cid}"
                 st, fb_json = await get_json(fb_url)
                 if st == 200 and fb_json:
@@ -227,6 +227,7 @@ async def fetch_wb_data(article: int) -> dict | None:
                 break
         if reviews_list:
             break
+
 
     if not reviews_list and name == "Товар WB":
         return None
