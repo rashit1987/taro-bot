@@ -125,7 +125,8 @@ def extract_article(text: str) -> int | None:
     match = re.search(r"catalog/(\d+)", text)
     if match:
         return int(match.group(1))
-    digits = re.findall(r"\b\d{6,12}\b", text)
+    cleaned = re.sub(r"(?<=\d)\s+(?=\d)", "", text)
+    digits = re.findall(r"\b\d{6,12}\b", cleaned)
     if digits:
         return int(next(iter(digits)))
     return None
@@ -569,10 +570,11 @@ async def ask_battle_articles(message: types.Message, state: FSMContext):
 
 @dp.message(ScanForm.waiting_battle)
 async def process_battle(message: types.Message, state: FSMContext):
-    found = re.findall(r"(?:catalog/)?(\d{6,12})", message.text or "")
+    cleaned_battle = re.sub(r"(?<=\d)[ \t]+(?=\d)", "", message.text or "")
+    found = re.findall(r"(?:catalog/)?(\d{6,12})", cleaned_battle)
     articles = list(dict.fromkeys(int(x) for x in found))
     if len(articles) < 2:
-        await message.answer("Нужно ровно ДВА разных артикула WB (например: `283675449 148920312`). Попробуй ещё раз:")
+        await message.answer("Нужно ровно ДВА разных артикула WB (например: 283675449 148920312). Попробуй ещё раз:")
         return
 
     await state.clear()
