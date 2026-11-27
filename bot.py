@@ -569,6 +569,7 @@ async def ask_battle_articles(message: types.Message, state: FSMContext):
 
 
 @dp.message(ScanForm.waiting_battle)
+@dp.message(StateFilter(None), F.text.regexp(r"(?:catalog/)?(?:\d[ \t]*){6,12}[\s,;]+(?:catalog/)?(?:\d[ \t]*){6,12}"))
 async def process_battle(message: types.Message, state: FSMContext):
     cleaned_battle = re.sub(r"(?<=\d)[ \t]+(?=\d)", "", message.text or "")
     found = re.findall(r"(?:catalog/)?(\d{6,12})", cleaned_battle)
