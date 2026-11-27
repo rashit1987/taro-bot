@@ -84,6 +84,22 @@ BATTLE_BUYER_PROMPT = (
     "4. НА ЧТО СМОТРЕТЬ НА ПВЗ ПРИ ВЫБОРЕ."
 )
 
+TOP_SELLER_PROMPT = (
+    "Ты — жёсткий и объективный ИИ-аналитик Wildberries. Тебе дали данные и свежие отзывы (1-3★ за 90 дней) по НЕСКОЛЬКИМ товарам (от 3 до 5 шт.) из одной ниши. "
+    "Сделай рейтинг карточек и разбор ниши. Пиши живым русским языком с эмодзи, без звёздочек (**). Структура: "
+    "1. РЕЙТИНГ КАРТОЧЕК (от 1-го до последнего места по качеству, рейтингу, цене и чистоте свежих отзывов — с коротким вердиктом по каждому). "
+    "2. ОБЩИЕ БОЛИ НИШИ (топ-3 системные проблемы, на которые жалуются клиенты у всех конкурентов). "
+    "3. КАК ЗАБРАТЬ РЫНОК (3 конкретных шага по товару и инфографике, чтобы обойти лидера рейтинга)."
+)
+
+TOP_BUYER_PROMPT = (
+    "Ты — честный ИИ-помощник покупателя на Wildberries. Покупатель выбирает лучший товар из нескольких вариантов (от 3 до 5 шт.) по их цене, рейтингу и свежим отзывам (1-3★ за 90 дней). "
+    "Помоги сделать безошибочный выбор без воды. Пиши просто, с эмодзи, без бизнес-терминов и без звёздочек (**). Структура: "
+    "1. ПЬЕДЕСТАЛ ПОБЕДИТЕЛЕЙ (расставь все товары от 1-го места до последнего: кого брать смело, кто запасной вариант, а кого точно отмести). "
+    "2. ГЛАВНЫЕ МИНУСЫ КАЖДОГО ВАРИАНТА (коротко по пунктам из реальных жалоб). "
+    "3. ЧТО ПРОВЕРИТЬ НА ПВЗ ПРИ ПОЛУЧЕНИИ."
+)
+
 
 class ScanForm(StatesGroup):
     waiting_article = State()
@@ -93,7 +109,7 @@ class ScanForm(StatesGroup):
 def main_menu():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🔍 Пробить товар по артикулу"), KeyboardButton(text="⚔️ Битва артикулов")],
+            [KeyboardButton(text="🔍 Пробить товар по артикулу"), KeyboardButton(text="⚖️ Сравнить товары (2–5 шт.)")],
             [KeyboardButton(text="📊 Режим: Селлер"), KeyboardButton(text="🛍 Режим: Покупатель")],
             [KeyboardButton(text="💳 Баланс и пополнение"), KeyboardButton(text="🤖 Хочу такого бота себе")],
         ],
@@ -118,13 +134,15 @@ def buy_keyboard():
         ]
     )
 
-def confirm_battle_keyboard(art1: int, art2: int):
+def confirm_battle_keyboard(articles: list[int]):
+    joined = "-".join(str(a) for a in articles[:5])
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="⚔️ Всё равно сравнить", callback_data=f"force_battle_{art1}_{art2}")],
+            [InlineKeyboardButton(text="⚖️ Всё равно сравнить", callback_data=f"force_battle_{joined}")],
             [InlineKeyboardButton(text="🔄 Ввести другие артикулы", callback_data="retry_battle")],
         ]
     )
+
 
 def extract_article(text: str) -> int | None:
     if not text:
@@ -562,72 +580,88 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
     except Exception as e:
         await wait_msg.edit_text(f"⚠️ Сбой нейроядра при анализе ({e}). Попытка не списана, попробуй через минуту.")
 
-@dp.message(F.text == "⚔️ Битва артикулов")
+@dp.message(F.text.in_(["⚔️ Битва артикулов", "⚖️ Сравнить товары (2–5 шт.)"]))
 async def ask_battle_articles(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) < 2:
         await message.answer(
-            "⚔️ Для «Битвы артикулов» нужно минимум 2 проверки на балансе (по одной на каждый товар).\n"
+            "⚖️ Для сравнения нужно минимум 2 проверки на балансе (по 1 проверке на каждый артикул).\n"
             "Пополни баланс ниже:",
             reply_markup=buy_keyboard(),
         )
         return
     await message.answer(
-        "⚔️ Режим «Битва артикулов» активирован!\n\n"
-        "Пришли ДВА артикула или две ссылки на товары WB через пробел или с новой строки "
-        "(в режиме Селлера первым ставь свой товар, вторым — конкурента):"
+        "⚖️ Режим сравнения и выбора лучшего включён!\n\n"
+        "Пришли от 2 до 5 артикулов (или ссылок WB) через пробел, запятую или с новой строки:\n"
+        "• 2 товара — сделаю глубокое сравнение 1 на 1;\n"
+        "• 3–5 товаров — расставлю по местам и помогу выбрать лучший вариант!"
     )
     await state.set_state(ScanForm.waiting_battle)
 
 
-async def run_battle_analysis(message: types.Message, user_id: int, username: str | None, art1: int, art2: int, skip_cat_check: bool = False, state: FSMContext | None = None):
-    if user_id not in ADMIN_IDS and get_user_scans(user_id) < 2:
-        await message.answer("Недостаточно проверок на балансе (нужно 2):", reply_markup=buy_keyboard())
+async def run_battle_analysis(message: types.Message, user_id: int, username: str | None, articles: list[int], skip_cat_check: bool = False, state: FSMContext | None = None):
+    articles = articles[:5]
+    cost = len(articles)
+
+    if user_id not in ADMIN_IDS and get_user_scans(user_id) < cost:
+        await message.answer(
+            f"Для анализа {cost} товаров нужно {cost} проверок на балансе (сейчас: {get_user_scans(user_id)}):",
+            reply_markup=buy_keyboard(),
+        )
         return
 
-    wait_msg = await message.answer(f"⚔️ Сталкиваю лбами {art1} и {art2}... Выгружаю обе карточки и свежие отзывы за 90 дней...")
+    arts_str = ", ".join(str(a) for a in articles)
+    wait_msg = await message.answer(f"⚖️ Загружаю {cost} карточек ({arts_str}) и фильтрую свежие отзывы за 90 дней...")
 
     try:
-        wb1, wb2 = await asyncio.gather(fetch_wb_data(art1), fetch_wb_data(art2))
+        wb_items = await asyncio.gather(*(fetch_wb_data(a) for a in articles))
     except Exception as e:
         await wait_msg.edit_text(f"⚠️ Ошибка при запросе к WB: {e}")
         return
 
-    if not wb1 or not wb2:
-        missing = art1 if not wb1 else art2
-        await wait_msg.edit_text(f"❌ Не удалось достать карточку {missing}. Проверь оба артикула и попробуй снова (попытки не списаны).")
-        return
-
-    cat1, cat2 = wb1.get("category", ""), wb2.get("category", "")
-    if not skip_cat_check and cat1 and cat2 and cat1 != cat2:
-        if state:
-            await state.update_data(warned_pair=sorted([art1, art2]))
-            await state.set_state(ScanForm.waiting_battle)
+    missing = [str(articles[i]) for i, item in enumerate(wb_items) if not item]
+    if missing:
         await wait_msg.edit_text(
-            f"⚠️ Похоже, товары из разных категорий:\n"
-            f"1️⃣ {wb1['name']} — категория «{cat1}»\n"
-            f"2️⃣ {wb2['name']} — категория «{cat2}»\n\n"
-            f"Сравниваем их в лоб (спишется 2 проверки) или заменишь артикул?",
-            reply_markup=confirm_battle_keyboard(art1, art2),
+            f"❌ Не удалось достать карточки: {', '.join(missing)}. Проверь артикулы и попробуй снова (попытки не списаны)."
         )
         return
 
-    passport = (
-        f"⚔️ БИТВА АРТИКУЛОВ WB\n\n"
-        f"1️⃣ ТОВАР №1 ({wb1['article']}): {wb1['name']} ({wb1['brand']})\n"
-        f"• Цена: {wb1['price']} | Рейтинг: {wb1['rating']}★ | Жалоб 1–3★ (90 дн.): {wb1['analyzed_count']} из {wb1['total_feedbacks']}\n\n"
-        f"2️⃣ ТОВАР №2 ({wb2['article']}): {wb2['name']} ({wb2['brand']})\n"
-        f"• Цена: {wb2['price']} | Рейтинг: {wb2['rating']}★ | Жалоб 1–3★ (90 дн.): {wb2['analyzed_count']} из {wb2['total_feedbacks']}"
-    )
+    categories = {item.get("category", "") for item in wb_items if item.get("category", "")}
+    if not skip_cat_check and len(categories) > 1:
+        if state:
+            await state.update_data(warned_pair=sorted(articles))
+            await state.set_state(ScanForm.waiting_battle)
+        lines = [f"{i+1}️⃣ {it['name']} — «{it.get('category') or 'без категории'}»" for i, it in enumerate(wb_items)]
+        await wait_msg.edit_text(
+            "⚠️ Похоже, в списке товары из разных категорий:\n"
+            + "\n".join(lines)
+            + f"\n\nВсё равно сравниваем их (спишется {cost} проверки) или заменишь список?",
+            reply_markup=confirm_battle_keyboard(articles),
+        )
+        return
 
-    user_prompt = (
-        f"{passport}\n\n"
-        f"--- ОТЗЫВЫ ТОВАРА №1 (1-3★) ---\n{wb1['reviews_text'] or 'Свежих жалоб нет'}\n\n"
-        f"--- ОТЗЫВЫ ТОВАРА №2 (1-3★) ---\n{wb2['reviews_text'] or 'Свежих жалоб нет'}"
-    )
+    header_title = "⚖️ СРАВНЕНИЕ ДВУХ ТОВАРОВ WB" if cost == 2 else f"🏆 ВЫБОР ЛУЧШЕГО ИЗ {cost} ТОВАРОВ WB"
+    passport_blocks = [header_title]
+    reviews_blocks = []
+    max_rev_lines = 150 if cost == 2 else 65
+
+    for idx, wb in enumerate(wb_items, start=1):
+        passport_blocks.append(
+            f"{idx}️⃣ ТОВАР №{idx} ({wb['article']}): {wb['name']} ({wb['brand']})\n"
+            f"• Цена: {wb['price']} | Рейтинг: {wb['rating']}★ | Жалоб 1–3★ (90 дн.): {wb['analyzed_count']} из {wb['total_feedbacks']}"
+        )
+        trimmed_rev = "\n".join((wb["reviews_text"] or "Свежих жалоб нет").splitlines()[:max_rev_lines])
+        reviews_blocks.append(f"--- ОТЗЫВЫ ТОВАРА №{idx} ({wb['name']}) ---\n{trimmed_rev}")
+
+    passport = "\n\n".join(passport_blocks)
+    user_prompt = f"{passport}\n\n" + "\n\n".join(reviews_blocks)
 
     try:
         user_role = get_user_role(user_id)
-        active_prompt = BATTLE_BUYER_PROMPT if user_role == "buyer" else BATTLE_SELLER_PROMPT
+        if cost == 2:
+            active_prompt = BATTLE_BUYER_PROMPT if user_role == "buyer" else BATTLE_SELLER_PROMPT
+        else:
+            active_prompt = TOP_BUYER_PROMPT if user_role == "buyer" else TOP_SELLER_PROMPT
+
         response = await ai_client.chat.completions.create(
             model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
             messages=[
@@ -640,10 +674,10 @@ async def run_battle_analysis(message: types.Message, user_id: int, username: st
         analysis = next(iter(response.choices)).message.content
 
         if user_id not in ADMIN_IDS:
-            cursor.execute("UPDATE users SET scans_left = scans_left - 2 WHERE user_id = ?", (user_id,))
+            cursor.execute("UPDATE users SET scans_left = scans_left - ? WHERE user_id = ?", (cost, user_id))
             conn.commit()
             try:
-                await bot.send_message(1273001338, f"⚔️ Битва WB: {art1} vs {art2} от @{username}")
+                await bot.send_message(1273001338, f"⚖️ Сравнение ({cost} шт.): {arts_str} от @{username}")
             except Exception:
                 pass
 
@@ -666,20 +700,22 @@ async def process_battle(message: types.Message, state: FSMContext):
     found = re.findall(r"(?:catalog/)?(\d{6,12})", cleaned_battle)
     articles = list(dict.fromkeys(int(x) for x in found))
     if len(articles) < 2:
-        await message.answer("Нужно ровно ДВА разных артикула WB (например: 283675449 148920312). Попробуй ещё раз:")
+        await message.answer("Нужно минимум ДВА разных артикула WB (от 2 до 5 шт.). Попробуй ещё раз:")
         return
 
-    art1, art2 = articles[0], articles[1]
+    if len(articles) > 5:
+        await message.answer("ℹ️ Взял первые 5 артикулов из списка (максимум за один раз).")
+        articles = articles[:5]
+
     data = await state.get_data()
-    already_warned = data.get("warned_pair") == sorted([art1, art2])
+    already_warned = data.get("warned_pair") == sorted(articles)
     await state.clear()
 
     await run_battle_analysis(
         message=message,
         user_id=message.from_user.id,
         username=message.from_user.username,
-        art1=art1,
-        art2=art2,
+        articles=articles,
         skip_cat_check=already_warned,
         state=state,
     )
@@ -689,15 +725,14 @@ async def process_battle(message: types.Message, state: FSMContext):
 async def cb_force_battle(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
-    parts = callback.data.split("_")
-    art1, art2 = int(parts[2]), int(parts[3])
+    raw_ids = callback.data.replace("force_battle_", "").split("-")
+    articles = [int(x) for x in raw_ids if x.isdigit()]
     await callback.message.delete()
     await run_battle_analysis(
         message=callback.message,
         user_id=callback.from_user.id,
         username=callback.from_user.username,
-        art1=art1,
-        art2=art2,
+        articles=articles,
         skip_cat_check=True,
         state=state,
     )
@@ -708,7 +743,7 @@ async def cb_retry_battle(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.update_data(warned_pair=None)
     await state.set_state(ScanForm.waiting_battle)
-    await callback.message.edit_text("🔄 Ок, попытки не списаны! Пришли два новых артикула WB через пробел или с новой строки:")
+    await callback.message.edit_text("🔄 Ок, попытки не списаны! Пришли от 2 до 5 новых артикулов WB через пробел или с новой строки:")
 
 
 @dp.message(F.text == "/stats")
