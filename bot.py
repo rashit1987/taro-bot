@@ -271,7 +271,7 @@ async def fetch_wb_data(article: int) -> dict | None:
         if len(filtered_reviews) >= 200:
             break
 
-        avg_rating = card_rating if card_rating else (round(sum(all_vals) / len(all_vals), 2) if all_vals else "—")
+    avg_rating = card_rating if card_rating else (round(sum(all_vals) / len(all_vals), 2) if all_vals else "—")
 
     return {
         "article": article,
