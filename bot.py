@@ -158,14 +158,15 @@ def candidate_baskets(vol: int) -> list[str]:
     elif vol <= 4349: guess = 24
     elif vol <= 4565: guess = 25
     else:
-        guess = 26 + (vol - 4566) // 1200
+        return [f"{b:02d}" for b in range(26, 70)]
 
     nums = []
-    for delta in range(-6, 7):
+    for delta in range(-4, 5):
         b = guess + delta
-        if 1 <= b <= 45:
+        if 1 <= b <= 30:
             nums.append(f"{b:02d}")
     return nums
+
 
 
 async def fetch_wb_data(article: int) -> dict | None:
@@ -228,16 +229,22 @@ async def fetch_wb_data(article: int) -> dict | None:
                 break
 
     if name == "Товар WB" or root_id == article:
-        for basket in candidate_baskets(vol):
-            card_cdn = f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{article}/info/ru/card.json"
-            st, c_data = await get_json(card_cdn)
-            if st == 200 and c_data:
-                name = c_data.get("imt_name", name)
-                brand = c_data.get("selling", {}).get("brand_name", brand)
-                found_imt = c_data.get("imt_id") or c_data.get("data", {}).get("imt_id")
-                if found_imt:
-                    root_id = found_imt
-                break
+        async def check_basket(b: str):
+            url = f"https://basket-{b}.wbbasket.ru/vol{vol}/part{part}/{article}/info/ru/card.json"
+            st_c, data_c = await get_json(url)
+            if st_c == 200 and data_c:
+                return data_c
+            return None
+
+        results = await asyncio.gather(*(check_basket(b) for b in candidate_baskets(vol)))
+        c_data = next((r for r in results if r), None)
+        if c_data:
+            name = c_data.get("imt_name", name)
+            brand = c_data.get("selling", {}).get("brand_name", brand)
+            found_imt = c_data.get("imt_id") or c_data.get("data", {}).get("imt_id")
+            if found_imt:
+                root_id = found_imt
+
 
     reviews_list = []
     candidate_ids = list(dict.fromkeys([root_id, article]))
