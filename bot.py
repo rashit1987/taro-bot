@@ -37,12 +37,9 @@ ai_client = AsyncOpenAI(
 
 conn = sqlite3.connect("wb_scout.db")
 cursor = conn.cursor()
-cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, scans_left INTEGER DEFAULT 2, role TEXT DEFAULT 'seller')")
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'seller'")
-except Exception:
-    pass
+cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, scans_left INTEGER DEFAULT 2, role TEXT DEFAULT NULL)")
 conn.commit()
+
 
 SELLER_PROMPT = (
     "Ты — объективный и точный ИИ-аналитик Wildberries. Оцени товар по свежим отзывам (1-3 звезды за 90 дней) с учётом среднего рейтинга карточки. "
@@ -106,24 +103,40 @@ class ScanForm(StatesGroup):
     waiting_battle = State()
 
 
-def main_menu():
+def seller_menu():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🔍 Пробить товар по артикулу"), KeyboardButton(text="⚖️ Сравнить товары (2–5 шт.)")],
-            [KeyboardButton(text="📊 Режим: Селлер"), KeyboardButton(text="🛍 Режим: Покупатель")],
             [KeyboardButton(text="💳 Баланс и пополнение"), KeyboardButton(text="🤖 Хочу такого бота себе")],
+            [KeyboardButton(text="🔄 Сменить режим (сейчас: Селлер)")],
         ],
         resize_keyboard=True,
     )
+
+
+def buyer_menu():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🔍 Пробить товар по артикулу"), KeyboardButton(text="⚖️ Сравнить товары (2–5 шт.)")],
+            [KeyboardButton(text="💳 Баланс и пополнение"), KeyboardButton(text="🔄 Сменить режим (сейчас: Покупатель)")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def get_menu_for_role(role: str | None):
+    return buyer_menu() if role == "buyer" else seller_menu()
 
 
 def role_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Я селлер / менеджер WB", callback_data="set_role_seller")],
-            [InlineKeyboardButton(text="🛍 Я покупатель (проверить товар)", callback_data="set_role_buyer")],
+            [InlineKeyboardButton(text="🛍 Я покупатель (выбираю товар)", callback_data="set_role_buyer")],
         ]
     )
+
+
 def buy_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -133,6 +146,7 @@ def buy_keyboard():
             [InlineKeyboardButton(text="💳 Оплатить картой РФ / СБП (написать ассистенту)", callback_data="contact_human")],
         ]
     )
+
 
 def confirm_battle_keyboard(articles: list[int]):
     joined = "-".join(str(a) for a in articles[:5])
@@ -144,17 +158,21 @@ def confirm_battle_keyboard(articles: list[int]):
     )
 
 
-def extract_article(text: str) -> int | None:
+def extract_all_articles(text: str) -> list[int]:
     if not text:
-        return None
-    match = re.search(r"catalog/(\d+)", text)
-    if match:
-        return int(match.group(1))
-    cleaned = re.sub(r"(?<=\d)\s+(?=\d)", "", text)
-    digits = re.findall(r"\b\d{6,12}\b", cleaned)
-    if digits:
-        return int(next(iter(digits)))
-    return None
+        return []
+    found: list[int] = []
+
+    def strip_url(m):
+        found.append(int(m.group(1)))
+        return " "
+
+    rem = re.sub(r"catalog/(\d+)", strip_url, text)
+    rem = re.sub(r"\b(\d{1,3})[ \t]+(\d{3})[ \t]+(\d{3,4})\b", r"\1\2\3", rem)
+    for d in re.findall(r"\b\d{6,12}\b", rem):
+        found.append(int(d))
+
+    return list(dict.fromkeys(found))
 
 
 def candidate_baskets(vol: int) -> list[str]:
@@ -369,15 +387,20 @@ def get_user_scans(user_id: int) -> int:
     return next(iter(row), 0) if row else 0
 
 
-def get_user_role(user_id: int) -> str:
+def get_user_role(user_id: int) -> str | None:
     cursor.execute("SELECT role FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
-    val = next(iter(row), "seller") if row else "seller"
-    return val if val in ("seller", "buyer") else "seller"
+    val = next(iter(row), None) if row else None
+    return val if val in ("seller", "buyer") else None
+
 
 @dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, username, scans_left, role) VALUES (?, ?, 2, 'seller')", (message.from_user.id, message.from_user.username))
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()
+    cursor.execute(
+        "INSERT OR IGNORE INTO users (user_id, username, scans_left, role) VALUES (?, ?, 2, NULL)",
+        (message.from_user.id, message.from_user.username),
+    )
     conn.commit()
     if message.from_user.id not in ADMIN_IDS:
         try:
@@ -387,36 +410,68 @@ async def cmd_start(message: types.Message):
     scans = get_user_scans(message.from_user.id)
     await message.answer(
         "🤖 На связи ИИ-разведчик Wildberries!\n\n"
-        "За 15 секунд вскрываю свежие отзывы (1–3★ за 90 дней) и показываю реальную картину о любом товаре.\n"
+        "За 15 секунд анализирую свежие отзывы (1–3★ за 90 дней), реальные цены и скрытые минусы товаров:\n"
+        "• кинь 1 артикул — сделаю полный разбор карточки;\n"
+        "• кинь 2–5 артикулов — сравню в лоб и выберу лучший вариант.\n\n"
         f"🎁 На балансе: {scans} бесплатных проверки.\n\n"
-        "Выбери, кто ты, чтобы я настроил формат отчёта под тебя:",
+        "Чтобы я открыл нужный кабинет и настроил формат отчётов, выбери свою роль 👇",
         reply_markup=role_keyboard(),
     )
-    await message.answer("Или сразу жми кнопку в меню ниже и кидай артикул WB 👇", reply_markup=main_menu())
+
 
 @dp.callback_query(F.data.startswith("set_role_"))
-async def cb_set_role(callback: types.CallbackQuery):
+async def cb_set_role(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
+    await state.clear()
     role = "buyer" if callback.data.endswith("buyer") else "seller"
+    cursor.execute(
+        "INSERT OR IGNORE INTO users (user_id, username, scans_left, role) VALUES (?, ?, 2, ?)",
+        (callback.from_user.id, callback.from_user.username, role),
+    )
     cursor.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, callback.from_user.id))
     conn.commit()
-    label = "🛍 Покупатель (честная проверка перед покупкой)" if role == "buyer" else "📊 Селлер / менеджер (анализ конкурентов и триггеры)"
-    await callback.message.answer(f"✅ Режим переключён: {label}.\nТеперь кидай артикул или ссылку на товар WB!", reply_markup=main_menu())
 
-@dp.message(F.text.in_(["📊 Режим: Селлер", "🛍 Режим: Покупатель"]))
-async def switch_role_btn(message: types.Message):
-    role = "buyer" if "Покупатель" in message.text else "seller"
-    cursor.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, message.from_user.id))
+    if role == "buyer":
+        text = (
+            "✅ Открыт кабинет Покупателя!\n\n"
+            "Теперь просто отправь в чат от 1 до 5 артикулов (или ссылок WB) — даже без нажатия кнопок:\n"
+            "• 1 товар — честно скажу, стоит ли брать и что проверить на ПВЗ;\n"
+            "• 2–5 товаров — расставлю по местам и подскажу лучший выбор."
+        )
+    else:
+        text = (
+            "✅ Открыт кабинет Селлера / менеджера WB!\n\n"
+            "Теперь просто отправь в чат от 1 до 5 артикулов (или ссылок WB) — даже без нажатия кнопок:\n"
+            "• 1 товар — вскрою боли за 90 дней и дам триггеры для инфографики;\n"
+            "• 2–5 товаров — сравню с конкурентами и дам план победы в нише."
+        )
+    await callback.message.answer(text, reply_markup=get_menu_for_role(role))
+
+
+@dp.message(F.text.startswith("🔄 Сменить режим"))
+async def switch_role_btn(message: types.Message, state: FSMContext):
+    await state.clear()
+    current = get_user_role(message.from_user.id)
+    new_role = "buyer" if current == "seller" else "seller"
+    cursor.execute("UPDATE users SET role = ? WHERE user_id = ?", (new_role, message.from_user.id))
     conn.commit()
-    label = "🛍 Покупатель (честная проверка перед покупкой)" if role == "buyer" else "📊 Селлер / менеджер (анализ конкурентов)"
-    await message.answer(f"✅ Включён режим: {label}.\nКидай артикул или ссылку на товар WB!", reply_markup=main_menu())
+    label = "🛍 Покупатель (честная проверка перед покупкой)" if new_role == "buyer" else "📊 Селлер / менеджер (анализ конкурентов и триггеры)"
+    await message.answer(
+        f"✅ Режим переключён: {label}.\nОтправляй от 1 до 5 артикулов или ссылок на товары WB!",
+        reply_markup=get_menu_for_role(new_role),
+    )
+
 
 @dp.message(F.text.in_(["🔍 Пробить товар по артикулу", "🔍 Пробить конкурента по артикулу"]))
 async def ask_article(message: types.Message, state: FSMContext):
+    role = get_user_role(message.from_user.id)
+    if not role:
+        await message.answer("Сначала выбери свою роль, чтобы я настроил формат отчётов:", reply_markup=role_keyboard())
+        return
     if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) <= 0:
         await message.answer("Бесплатный лимит исчерпан. Выбирай пакет ниже:", reply_markup=buy_keyboard())
         return
-    await message.answer("Кидай артикул товара WB (например, 207509051) или прямую ссылку на карточку:")
+    await message.answer("Кидай артикул товара WB (например, 283675449) или прямую ссылку на карточку:")
     await state.set_state(ScanForm.waiting_article)
 
 
@@ -493,16 +548,8 @@ async def successful_payment(message: types.Message, state: FSMContext):
     await state.set_state(ScanForm.waiting_article)
 
 
-@dp.message(ScanForm.waiting_article)
-@dp.message(StateFilter(None), F.text.regexp(r"(wildberries\.ru/catalog/\d+|^\s*(?:\d[ \t]*){6,12}\s*$)"))
-async def analyze_competitor(message: types.Message, state: FSMContext):
-    await state.clear()
-    article = extract_article(message.text)
-    if not article:
-        await message.answer("Не вижу нормального артикула. Пришли цифры (например, 148920312) или ссылку на товар WB.")
-        return
-
-    if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) <= 0:
+async def run_single_analysis(message: types.Message, user_id: int, username: str | None, article: int, role: str):
+    if user_id not in ADMIN_IDS and get_user_scans(user_id) <= 0:
         await message.answer(
             "На балансе 0 сканирований. Пополни энергию серверов, чтобы продолжить разведку:",
             reply_markup=buy_keyboard(),
@@ -521,7 +568,6 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
         await wait_msg.edit_text("❌ Не удалось достать карточку с таким артикулом. Проверь цифры и попробуй ещё раз.")
         return
 
-
     passport = (
         f"📦 ПАСПОРТ ОБЪЕКТА (WB: {wb_info['article']})\n"
         f"• Товар: {wb_info['name']} ({wb_info['brand']})\n"
@@ -533,12 +579,11 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
 
     if wb_info["analyzed_count"] == 0:
         await wait_msg.edit_text(
-            f"{passport}\n"
+            f"{passport}\n\n"
             "✅ За последние 90 дней у этого товара вообще нет свежих негативных отзывов (1–3★). "
             "Либо партия идеальная, либо карточка совсем свежая — разбирать пока нечего, списание не засчитано!"
         )
         return
-
 
     user_prompt = (
         f"Данные товара:\n{passport}\n\n"
@@ -546,8 +591,7 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
     )
 
     try:
-        user_role = get_user_role(message.from_user.id)
-        active_prompt = BUYER_PROMPT if user_role == "buyer" else SELLER_PROMPT
+        active_prompt = BUYER_PROMPT if role == "buyer" else SELLER_PROMPT
         response = await ai_client.chat.completions.create(
             model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
             messages=[
@@ -557,31 +601,36 @@ async def analyze_competitor(message: types.Message, state: FSMContext):
             temperature=0.6,
         )
 
-        first_choice = next(iter(response.choices))
-        analysis = first_choice.message.content
+        analysis = next(iter(response.choices)).message.content
 
-        if message.from_user.id not in ADMIN_IDS:
-            cursor.execute("UPDATE users SET scans_left = scans_left - 1 WHERE user_id = ?", (message.from_user.id,))
+        if user_id not in ADMIN_IDS:
+            cursor.execute("UPDATE users SET scans_left = scans_left - 1 WHERE user_id = ?", (user_id,))
             conn.commit()
             try:
-                await bot.send_message(1273001338, f"🔍 Разбор WB: {article} от @{message.from_user.username}")
+                await bot.send_message(1273001338, f"🔍 Разбор WB: {article} от @{username}")
             except Exception:
                 pass
 
         await wait_msg.delete()
         full_report = f"{passport}\n\n{analysis}"
+        menu = get_menu_for_role(role)
 
         if len(full_report) <= 4000:
-            await message.answer(full_report, reply_markup=main_menu())
+            await message.answer(full_report, reply_markup=menu)
         else:
             await message.answer(passport)
-            await message.answer(analysis[:4000], reply_markup=main_menu())
+            await message.answer(analysis[:4000], reply_markup=menu)
 
     except Exception as e:
         await wait_msg.edit_text(f"⚠️ Сбой нейроядра при анализе ({e}). Попытка не списана, попробуй через минуту.")
 
+
 @dp.message(F.text.in_(["⚔️ Битва артикулов", "⚖️ Сравнить товары (2–5 шт.)"]))
 async def ask_battle_articles(message: types.Message, state: FSMContext):
+    role = get_user_role(message.from_user.id)
+    if not role:
+        await message.answer("Сначала выбери свою роль, чтобы я настроил формат отчётов:", reply_markup=role_keyboard())
+        return
     if message.from_user.id not in ADMIN_IDS and get_user_scans(message.from_user.id) < 2:
         await message.answer(
             "⚖️ Для сравнения нужно минимум 2 проверки на балансе (по 1 проверке на каждый артикул).\n"
@@ -598,7 +647,7 @@ async def ask_battle_articles(message: types.Message, state: FSMContext):
     await state.set_state(ScanForm.waiting_battle)
 
 
-async def run_battle_analysis(message: types.Message, user_id: int, username: str | None, articles: list[int], skip_cat_check: bool = False, state: FSMContext | None = None):
+async def run_battle_analysis(message: types.Message, user_id: int, username: str | None, articles: list[int], role: str, skip_cat_check: bool = False, state: FSMContext | None = None):
     articles = articles[:5]
     cost = len(articles)
 
@@ -656,11 +705,10 @@ async def run_battle_analysis(message: types.Message, user_id: int, username: st
     user_prompt = f"{passport}\n\n" + "\n\n".join(reviews_blocks)
 
     try:
-        user_role = get_user_role(user_id)
         if cost == 2:
-            active_prompt = BATTLE_BUYER_PROMPT if user_role == "buyer" else BATTLE_SELLER_PROMPT
+            active_prompt = BATTLE_BUYER_PROMPT if role == "buyer" else BATTLE_SELLER_PROMPT
         else:
-            active_prompt = TOP_BUYER_PROMPT if user_role == "buyer" else TOP_SELLER_PROMPT
+            active_prompt = TOP_BUYER_PROMPT if role == "buyer" else TOP_SELLER_PROMPT
 
         response = await ai_client.chat.completions.create(
             model="deepseek/deepseek-v4.1-flash-1017-alt-lowcost",
@@ -683,24 +731,98 @@ async def run_battle_analysis(message: types.Message, user_id: int, username: st
 
         await wait_msg.delete()
         full_report = f"{passport}\n\n{analysis}"
+        menu = get_menu_for_role(role)
         if len(full_report) <= 4000:
-            await message.answer(full_report, reply_markup=main_menu())
+            await message.answer(full_report, reply_markup=menu)
         else:
             await message.answer(passport)
-            await message.answer(analysis[:4000], reply_markup=main_menu())
+            await message.answer(analysis[:4000], reply_markup=menu)
 
     except Exception as e:
         await wait_msg.edit_text(f"⚠️ Сбой нейроядра при сравнении ({e}). Попытки не списаны.")
 
 
-@dp.message(ScanForm.waiting_battle)
-@dp.message(StateFilter(None), F.text.regexp(r"(?:catalog/)?(?:\d[ \t]*){6,12}\D+(?:catalog/)?(?:\d[ \t]*){6,12}"))
-async def process_battle(message: types.Message, state: FSMContext):
-    cleaned_battle = re.sub(r"(?<=\d)[ \t]+(?=\d)", "", message.text or "")
-    found = re.findall(r"(?:catalog/)?(\d{6,12})", cleaned_battle)
-    articles = list(dict.fromkeys(int(x) for x in found))
-    if len(articles) < 2:
-        await message.answer("Нужно минимум ДВА разных артикула WB (от 2 до 5 шт.). Попробуй ещё раз:")
+@dp.callback_query(F.data.startswith("force_battle_"))
+async def cb_force_battle(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    role = get_user_role(callback.from_user.id) or "seller"
+    raw_ids = callback.data.replace("force_battle_", "").split("-")
+    articles = [int(x) for x in raw_ids if x.isdigit()]
+    await callback.message.delete()
+    await run_battle_analysis(
+        message=callback.message,
+        user_id=callback.from_user.id,
+        username=callback.from_user.username,
+        articles=articles,
+        role=role,
+        skip_cat_check=True,
+        state=state,
+    )
+
+
+@dp.callback_query(F.data == "retry_battle")
+async def cb_retry_battle(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.update_data(warned_pair=None)
+    await state.set_state(ScanForm.waiting_battle)
+    await callback.message.edit_text("🔄 Ок, попытки не списаны! Пришли от 2 до 5 новых артикулов WB через пробел или с новой строки:")
+
+
+@dp.message(F.text)
+async def smart_articles_router(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    role = get_user_role(message.from_user.id)
+
+    if not role:
+        await message.answer(
+            "Сначала выбери свою роль, чтобы я открыл нужный кабинет и настроил формат отчётов 👇",
+            reply_markup=role_keyboard(),
+        )
+        return
+
+    articles = extract_all_articles(message.text)
+
+    if not articles:
+        if current_state == ScanForm.waiting_battle:
+@dp.message(F.text)
+async def smart_articles_router(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    role = get_user_role(message.from_user.id)
+
+    if not role:
+        await message.answer(
+            "Сначала выбери свою роль, чтобы я открыл нужный кабинет и настроил формат отчётов 👇",
+            reply_markup=role_keyboard(),
+        )
+        return
+
+    articles = extract_all_articles(message.text)
+
+    if not articles:
+        if current_state == ScanForm.waiting_battle:
+            await message.answer("Нужно минимум ДВА разных артикула WB (от 2 до 5 шт.) через пробел или с новой строки. Попробуй ещё раз:")
+        elif current_state == ScanForm.waiting_article:
+            await message.answer("Не вижу нормального артикула. Пришли цифры (например, 283675449) или ссылку на товар WB:")
+        else:
+            await message.answer(
+                "Отправь от 1 до 5 артикулов (или ссылок на товары WB) через пробел или с новой строки — я сразу сделаю разбор!",
+                reply_markup=get_menu_for_role(role),
+            )
+        return
+
+    if len(articles) == 1:
+        if current_state == ScanForm.waiting_battle:
+            await message.answer("Ты в режиме сравнения — нужно минимум ДВА разных артикула WB (от 2 до 5 шт.). Пришли второй артикул или нажми кнопку в меню:")
+            return
+        await state.clear()
+        await run_single_analysis(
+            message=message,
+            user_id=message.from_user.id,
+            username=message.from_user.username,
+            article=articles[0],
+            role=role,
+        )
         return
 
     if len(articles) > 5:
@@ -716,34 +838,10 @@ async def process_battle(message: types.Message, state: FSMContext):
         user_id=message.from_user.id,
         username=message.from_user.username,
         articles=articles,
+        role=role,
         skip_cat_check=already_warned,
         state=state,
     )
-
-
-@dp.callback_query(F.data.startswith("force_battle_"))
-async def cb_force_battle(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await state.clear()
-    raw_ids = callback.data.replace("force_battle_", "").split("-")
-    articles = [int(x) for x in raw_ids if x.isdigit()]
-    await callback.message.delete()
-    await run_battle_analysis(
-        message=callback.message,
-        user_id=callback.from_user.id,
-        username=callback.from_user.username,
-        articles=articles,
-        skip_cat_check=True,
-        state=state,
-    )
-
-
-@dp.callback_query(F.data == "retry_battle")
-async def cb_retry_battle(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await state.update_data(warned_pair=None)
-    await state.set_state(ScanForm.waiting_battle)
-    await callback.message.edit_text("🔄 Ок, попытки не списаны! Пришли от 2 до 5 новых артикулов WB через пробел или с новой строки:")
 
 
 @dp.message(F.text == "/stats")
