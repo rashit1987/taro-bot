@@ -143,9 +143,10 @@ def candidate_baskets(vol: int) -> list[str]:
 async def fetch_wb_data(article: int) -> dict | None:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Origin": "https://wildberries.ru",
-        "Referer": f"https://wildberries.ru/catalog/{article}/detail.aspx",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Origin": "https://www.wildberries.ru",
+        "Referer": f"https://wildberries.ru{article}/detail.aspx",
     }
     timeout = aiohttp.ClientTimeout(total=15)
     vol = article // 100000
@@ -158,17 +159,17 @@ async def fetch_wb_data(article: int) -> dict | None:
         price_str = "по карте WB"
         card_rating = None
 
-        detail_url = f"https://wb.ru{article}"
+        detail_url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1255987&spp=30&ab_testing=false&nm={article}"
         try:
             async with session.get(detail_url) as d_resp:
                 if d_resp.status == 200:
                     d_json = await d_resp.json(content_type=None)
-                    products = d_json.get("data", {}).get("products") or []
+                    products = d_json.get("data", {}).get("products") or d_json.get("products") or []
                     if products:
                         prod = next(iter(products))
                         name = prod.get("name") or name
                         brand = prod.get("brand") or brand
-                        root_id = prod.get("root") or root_id
+                        root_id = prod.get("root") or prod.get("imt_id") or root_id
                         card_rating = prod.get("reviewRating") or prod.get("rating")
                         sizes = prod.get("sizes") or []
                         if sizes:
@@ -189,7 +190,9 @@ async def fetch_wb_data(article: int) -> dict | None:
                             c_data = await resp.json(content_type=None)
                             name = c_data.get("imt_name", name)
                             brand = c_data.get("selling", {}).get("brand_name", brand)
-                            root_id = c_data.get("imt_id", root_id)
+                            found_imt = c_data.get("imt_id") or c_data.get("data", {}).get("imt_id")
+                            if found_imt:
+                                root_id = found_imt
                             break
                 except Exception:
                     continue
