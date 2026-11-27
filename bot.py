@@ -465,7 +465,7 @@ async def successful_payment(message: types.Message, state: FSMContext):
 
 
 @dp.message(ScanForm.waiting_article)
-@dp.message(F.text.regexp(r"(wildberries\.ru/catalog/\d+|^\d{6,12}$)"))
+@dp.message(F.text.regexp(r"(wildberries\.ru/catalog/\d+|(?:\d\s*){6,12})"))
 async def analyze_competitor(message: types.Message, state: FSMContext):
     await state.clear()
     article = extract_article(message.text)
