@@ -154,9 +154,9 @@ def buy_keyboard():
             [InlineKeyboardButton(text="⚡ 1 разбор — 20 ⭐", callback_data="buy_1")],
             [InlineKeyboardButton(text="🔥 10 разборов — 150 ⭐", callback_data="buy_10")],
             [InlineKeyboardButton(text="🚀 30 разборов — 350 ⭐", callback_data="buy_30")],
-            [InlineKeyboardButton(text="💳 Оплатить картой РФ / СБП (скоро)", callback_data="contact_human")],
         ]
     )
+
 
 
 def confirm_battle_keyboard(articles: list[int]):
@@ -517,9 +517,10 @@ async def ask_article(message: types.Message, state: FSMContext):
 @dp.message(F.text == "💳 Баланс и пополнение")
 async def show_balance(message: types.Message):
     scans = "Безлимит (Админ)" if message.from_user.id in ADMIN_IDS else get_user_scans(message.from_user.id)
-    await message.answer(
-        f"📊 Доступно разборов: {scans}\n\n"
-        "Чтобы мои серверы и нейросети не ушли в спящий режим, выбирай пакет сканирований (оплата в Telegram Stars в 2 клика):",
+       await message.answer(
+        f"💳 Твой баланс: {scans} проверок.\n\n"
+        f"Оплата внутри бота работает через официальную валюту Telegram — Stars (⭐).\n"
+        f"💡 Если звёзд на балансе пока нет, купить их картой РФ или через СБП за 30 секунд можно в официальном боте @PremiumBot — после этого просто нажми на нужный пакет ниже 👇",
         reply_markup=buy_keyboard(),
     )
 
@@ -647,7 +648,8 @@ async def run_single_analysis(message: types.Message, user_id: int, username: st
             temperature=0.6,
         )
 
-        analysis = next(iter(response.choices)).message.content
+    analysis = re.sub(r"^#+\s*", "", next(iter(response.choices)).message.content, flags=re.MULTILINE)
+
 
         if user_id not in ADMIN_IDS:
             cursor.execute("UPDATE users SET scans_left = scans_left - 1 WHERE user_id = ?", (user_id,))
@@ -765,7 +767,7 @@ async def run_battle_analysis(message: types.Message, user_id: int, username: st
             temperature=0.6,
         )
 
-        analysis = next(iter(response.choices)).message.content
+    analysis = re.sub(r"^#+\s*", "", next(iter(response.choices)).message.content, flags=re.MULTILINE)
 
         if user_id not in ADMIN_IDS:
             cursor.execute("UPDATE users SET scans_left = scans_left - ? WHERE user_id = ?", (cost, user_id))
