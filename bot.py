@@ -517,7 +517,7 @@ async def ask_article(message: types.Message, state: FSMContext):
 @dp.message(F.text == "💳 Баланс и пополнение")
 async def show_balance(message: types.Message):
     scans = "Безлимит (Админ)" if message.from_user.id in ADMIN_IDS else get_user_scans(message.from_user.id)
-       await message.answer(
+    await message.answer(
         f"💳 Твой баланс: {scans} проверок.\n\n"
         f"Оплата внутри бота работает через официальную валюту Telegram — Stars (⭐).\n"
         f"💡 Если звёзд на балансе пока нет, купить их картой РФ или через СБП за 30 секунд можно в официальном боте @PremiumBot — после этого просто нажми на нужный пакет ниже 👇",
