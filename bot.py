@@ -519,8 +519,8 @@ async def show_balance(message: types.Message):
     scans = "Безлимит (Админ)" if message.from_user.id in ADMIN_IDS else get_user_scans(message.from_user.id)
     await message.answer(
         f"💳 Твой баланс: {scans} проверок.\n\n"
-        f"Оплата внутри бота работает через официальную валюту Telegram — Stars (⭐).\n"
-        f"💡 Если звёзд на балансе пока нет, купить их картой РФ или через СБП за 30 секунд можно в официальном боте @PremiumBot — после этого просто нажми на нужный пакет ниже 👇",
+        f"Оплата работает через внутреннюю валюту Telegram — Stars (⭐).\n"
+        f"💡 Если на счёте 0 ⭐ и при нажатии на пакет с ПК возникает ошибка оплаты картой — пополни звёзды по своему @username за 30 секунд через Fragment.com (вкладка Stars) или любой привычный сервис пополнения Telegram Stars (например, МТС Оплата / Kupikod), а затем выбери пакет ниже 👇",
         reply_markup=buy_keyboard(),
     )
 
