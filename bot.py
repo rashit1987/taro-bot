@@ -648,7 +648,7 @@ async def run_single_analysis(message: types.Message, user_id: int, username: st
             temperature=0.6,
         )
 
-    analysis = re.sub(r"^#+\s*", "", next(iter(response.choices)).message.content, flags=re.MULTILINE)
+        analysis = re.sub(r"^#+\s*", "", next(iter(response.choices)).message.content, flags=re.MULTILINE)
 
 
         if user_id not in ADMIN_IDS:
