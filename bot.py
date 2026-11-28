@@ -154,8 +154,13 @@ def buy_keyboard():
             [InlineKeyboardButton(text="⚡ 1 разбор — 20 ⭐", callback_data="buy_1")],
             [InlineKeyboardButton(text="🔥 10 разборов — 150 ⭐", callback_data="buy_10")],
             [InlineKeyboardButton(text="🚀 30 разборов — 350 ⭐", callback_data="buy_30")],
+            [
+                InlineKeyboardButton(text="🔴 Купить ⭐ (МТС Оплата)", url="https://mts.ru"),
+                InlineKeyboardButton(text="🟣 Купить ⭐ (Kupikod)", url="https://kupikod.com"),
+            ],
         ]
     )
+
 
 
 
@@ -519,8 +524,12 @@ async def show_balance(message: types.Message):
     scans = "Безлимит (Админ)" if message.from_user.id in ADMIN_IDS else get_user_scans(message.from_user.id)
     await message.answer(
         f"💳 Твой баланс: {scans} проверок.\n\n"
-        f"Оплата работает через внутреннюю валюту Telegram — Stars (⭐).\n"
-        f"💡 Если на счёте 0 ⭐ и при нажатии на пакет с ПК возникает ошибка оплаты картой — пополни звёзды по своему @username за 30 секунд через Fragment.com (вкладка Stars) или любой привычный сервис пополнения Telegram Stars (например, МТС Оплата / Kupikod), а затем выбери пакет ниже 👇",
+        f"Оплата внутри бота работает через официальную валюту Telegram — Stars (⭐).\n\n"
+        f"🐣 Как пополнить звёзды за 30 секунд (если на счёте 0 ⭐):\n"
+        f"1️⃣ Скопируй свой никнейм в Telegram (вида @ваш_ник).\n"
+        f"2️⃣ Нажми любую кнопку пополнения ниже (МТС Оплата или Kupikod), вставь свой @ник и оплати картой РФ или через СБП (либо пополни любым привычным для тебя способом).\n"
+        f"3️⃣ Звёзды придут на твой аккаунт в течение минуты — после этого просто нажми на нужный пакет 👇\n\n"
+        f"⚠️ Важно: мы не являемся владельцами сторонних платёжных площадок (включая МТС Оплата, Kupikod и др.) и не несём ответственности за их работу, комиссии и зачисление средств с их стороны.",
         reply_markup=buy_keyboard(),
     )
 
